@@ -69,17 +69,18 @@ def _print_results(results):
 
     for i, row in results.iterrows():
         print(f"\n[{i+1}] {row['name']}")
-        print(f"     재료 보유율 : {row['coverage']*100:.0f}%")
-        print(f"     탄수화물    : {row['carbs_g']:.1f}g  |  "
+        print(f"     재료 보유율    : {row['coverage']*100:.0f}%")
+        print(f"     탄수화물       : {row['carbs_g']:.1f}g  |  "
               f"식이섬유: {row['fiber_g']:.1f}g  |  "
               f"순 탄수화물: {row['net_carbs_g']:.1f}g")
         if row['bg_rise_mg_dl'] is not None:
-            print(f"     혈당 상승   : +{row['bg_rise_mg_dl']:.0f} mg/dL (예측)")
-        print(f"     당뇨 적합성 : [{row['suitability']}]  {row['suitability_desc']}")
+            print(f"     혈당 상승 예측 : +{row['bg_rise_mg_dl']:.0f} mg/dL  "
+                  f"-> 식후 혈당 {row['post_meal_bg']:.0f} mg/dL")
+        print(f"     당뇨 적합성    : [{row['suitability']}]  {row['suitability_desc']}")
 
     print(f"\n{'='*65}")
-    print("※ 혈당 예측은 1인 CGM 데이터 기반 Random Forest 모델 추정치입니다.")
-    print("  개인차가 크므로 참고용으로만 활용하세요.")
+    print("※ 판정 기준: 식후 2시간 혈당 180 mg/dL 미만 (대한당뇨병학회)")
+    print("  1인 CGM 데이터 기반 추정치 — 개인차가 크므로 참고용으로만 활용하세요.")
 
 
 def interactive_session(model: DiabetesRecipeRecommender):

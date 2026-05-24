@@ -45,16 +45,19 @@
 
 ### 당뇨 적합성 판정 기준
 
-| 등급 | 혈당 상승 예측 | 기준 |
-|------|--------------|------|
-| 적합 | +20 mg/dL 이하 | 매우 낮은 혈당 영향 |
-| 적합 | +21~40 mg/dL | 낮은 혈당 영향 |
-| 주의 | +41~60 mg/dL | 보통 수준 |
-| 고주의 | +61~80 mg/dL | 높은 혈당 영향 |
-| 비권장 | +80 mg/dL 초과 | 매우 높은 혈당 영향 |
+```
+식후 혈당 예측 = 식전 혈당 + 혈당 상승 예측값
+```
 
-ADA post-meal 목표 혈당 < 180 mg/dL 기준 참고
-([ADA Standards of Care 2025](https://diabetesjournals.org/care/article/48/Supplement_1/S86/157563/5-Facilitating-Positive-Health-Behaviors-and-Well))
+| 등급 | 조건 | 설명 |
+|------|------|------|
+| **적합** | 식후 혈당 예측 < 180 mg/dL | 목표 달성 |
+| **부적합** | 식후 혈당 예측 >= 180 mg/dL | 목표 초과 |
+
+**출처: [대한당뇨병학회](https://www.diabetes.or.kr/general/info/treat/treat_01.php)**
+- 식전 혈당 목표: 80~130 mg/dL
+- 식후 2시간 혈당 목표: **180 mg/dL 미만**
+- 당화혈색소 목표: 6.5% 미만
 
 ---
 

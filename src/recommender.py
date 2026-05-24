@@ -28,7 +28,7 @@ from .nutrition_db import load_nutrition_db, estimate_recipe_nutrition
 from .bg_model import BGRiseModel
 from .collaborative import CollaborativeFilter
 
-_SUIT_RANK = {"적합": 0, "주의": 1, "고주의": 2, "비권장": 3}
+_SUIT_RANK = {"적합": 0, "부적합": 1}
 
 
 class DiabetesRecipeRecommender:
@@ -107,13 +107,15 @@ class DiabetesRecipeRecommender:
             nutr = estimate_recipe_nutrition(row["ingredients"], self.nutrition_db)
             if self._bg_fitted:
                 bg_rise = self.bg_model.predict(nutr, meal_type, pre_bg)
-                label, desc = self.bg_model.classify(bg_rise)
+                label, desc, post_bg = self.bg_model.classify(bg_rise, pre_bg)
             else:
                 bg_rise = None
+                post_bg = None
                 label, desc = "정보 없음", "BG 모델 미학습"
             nutrition_rows.append({
                 **nutr,
                 "bg_rise_mg_dl": bg_rise,
+                "post_meal_bg": post_bg,
                 "suitability": label,
                 "suitability_desc": desc,
             })
@@ -163,6 +165,7 @@ class DiabetesRecipeRecommender:
         return result[[
             "name", "coverage",
             "carbs_g", "sugar_g", "fiber_g", "net_carbs_g",
-            "bg_rise_mg_dl", "suitability", "suitability_desc",
+            "bg_rise_mg_dl", "post_meal_bg",
+            "suitability", "suitability_desc",
             "calories", "ingredients",
         ]]

@@ -210,24 +210,36 @@ class BGRiseModel:
         pred = float(self.model.predict(X)[0])
         return round(max(0.0, pred), 1)
 
-    def classify(self, bg_rise: float) -> tuple[str, str]:
+    def classify(self, bg_rise: float, pre_bg: float = 110.0) -> tuple[str, str, float]:
         """
-        Classify diabetes suitability from predicted BG rise.
+        식후 2시간 혈당을 계산하여 대한당뇨병학회 기준으로 적합/부적합 판정.
 
-        Thresholds based on ADA post-meal target < 180 mg/dL
-        assuming typical T2D pre-meal baseline ~130 mg/dL
-        (safe rise budget = 50 mg/dL).
+        기준 (출처: 대한당뇨병학회 https://www.diabetes.or.kr)
+          - 식전 혈당 목표: 80~130 mg/dL
+          - 식후 2시간 혈당 목표: 180 mg/dL 미만
+
+        판정 로직
+          post_meal_bg = pre_bg + bg_rise
+          < 180 mg/dL  -> 적합
+          >= 180 mg/dL -> 부적합
+
+        Returns
+        -------
+        (label, description, post_meal_bg)
+          label        : '적합' | '부적합'
+          description  : 식후 혈당 수치 포함 설명
+          post_meal_bg : 예측 식후 혈당 (mg/dL)
         """
-        if bg_rise <= 20:
-            return "적합", f"혈당 상승 예측 +{bg_rise:.0f} mg/dL (매우 낮음)"
-        elif bg_rise <= 40:
-            return "적합", f"혈당 상승 예측 +{bg_rise:.0f} mg/dL (낮음)"
-        elif bg_rise <= 60:
-            return "주의", f"혈당 상승 예측 +{bg_rise:.0f} mg/dL (보통)"
-        elif bg_rise <= 80:
-            return "고주의", f"혈당 상승 예측 +{bg_rise:.0f} mg/dL (높음)"
+        post_meal_bg = round(pre_bg + bg_rise, 1)
+        if post_meal_bg < 180:
+            label = "적합"
+            desc = (f"식후 혈당 예측 {post_meal_bg:.0f} mg/dL "
+                    f"(기준 180 미만 — 목표 달성)")
         else:
-            return "비권장", f"혈당 상승 예측 +{bg_rise:.0f} mg/dL (매우 높음)"
+            label = "부적합"
+            desc = (f"식후 혈당 예측 {post_meal_bg:.0f} mg/dL "
+                    f"(기준 180 초과 — {post_meal_bg - 180:.0f} mg/dL 초과)")
+        return label, desc, post_meal_bg
 
     @property
     def cv_rmse(self) -> float | None:
