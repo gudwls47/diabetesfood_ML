@@ -83,6 +83,26 @@ def _print_results(results):
     print("  1인 CGM 데이터 기반 추정치 — 개인차가 크므로 참고용으로만 활용하세요.")
 
 
+def _input_pre_bg() -> float:
+    """식전 혈당 입력 및 유효성 검사. 정상 범위(80~130) 벗어나면 경고."""
+    while True:
+        raw = input("식전 혈당 입력 (mg/dL, 80~130): ").strip()
+        if not raw:
+            print("  식전 혈당을 입력해주세요.")
+            continue
+        try:
+            val = float(raw)
+        except ValueError:
+            print("  숫자로 입력해주세요. (예: 110)")
+            continue
+        if val < 50 or val > 400:
+            print("  입력값이 너무 크거나 작습니다. 다시 입력해주세요.")
+            continue
+        if val < 80 or val > 130:
+            print(f"  참고: 입력하신 {val:.0f} mg/dL은 식전 혈당 목표 범위(80~130)를 벗어납니다.")
+        return val
+
+
 def interactive_session(model: DiabetesRecipeRecommender):
     print("=" * 65)
     print("  당뇨 환자를 위한 냉장고 레시피 추천기")
@@ -90,31 +110,43 @@ def interactive_session(model: DiabetesRecipeRecommender):
     print("=" * 65)
 
     while True:
-        raw = input("\n냉장고 재료 입력 (쉼표 구분): ").strip()
-        if raw.lower() == "q":
+        # 1. 식전 혈당
+        print()
+        pre_bg_raw = input("식전 혈당 입력 (mg/dL, 80~130) 또는 'q' 종료: ").strip()
+        if pre_bg_raw.lower() == "q":
             print("종료합니다.")
             break
+        try:
+            pre_bg = float(pre_bg_raw)
+            if pre_bg < 50 or pre_bg > 400:
+                print("  입력값이 범위를 벗어났습니다. 다시 시도해주세요.")
+                continue
+            if pre_bg < 80 or pre_bg > 130:
+                print(f"  참고: {pre_bg:.0f} mg/dL은 식전 목표 범위(80~130)를 벗어납니다.")
+        except ValueError:
+            print("  숫자로 입력해주세요.")
+            continue
 
+        # 2. 냉장고 재료
+        raw = input("냉장고 재료 입력 (쉼표 구분): ").strip()
         ingredients = [i.strip() for i in raw.split(",") if i.strip()]
         if not ingredients:
             print("재료를 하나 이상 입력해주세요.")
             continue
 
+        # 3. 식사 유형
         meal = input("식사 유형 (breakfast/lunch/dinner/snacks, 기본 lunch): ").strip()
         meal = meal if meal else "lunch"
 
         cov = input("최소 재료 보유율 % (기본 50): ").strip()
         min_cov = float(cov) / 100 if cov else 0.5
 
-        excl = input("제외할 등급 (예: 비권장 / 없으면 Enter): ").strip()
-        exclude = [e.strip() for e in excl.split(",") if e.strip()] or None
-
         results = model.recommend(
             ingredients=ingredients,
             top_n=10,
             min_coverage=min_cov,
             meal_type=meal,
-            exclude_suitability=exclude,
+            pre_bg=pre_bg,
         )
         _print_results(results)
 
@@ -127,6 +159,8 @@ def main():
     parser.add_argument("--max-recipes", type=int, default=50_000)
     parser.add_argument("--no-cf",       action="store_true")
     parser.add_argument("--ingredients", nargs="+")
+    parser.add_argument("--pre-bg",      type=float, default=None,
+                        help="식전 혈당 (mg/dL). 미입력 시 대화형 모드에서 질문.")
     parser.add_argument("--meal-type",   default="lunch")
     parser.add_argument("--top-n",       type=int, default=10)
     parser.add_argument("--min-coverage", type=float, default=0.5)
@@ -138,11 +172,13 @@ def main():
     )
 
     if args.ingredients:
+        pre_bg = args.pre_bg if args.pre_bg is not None else _input_pre_bg()
         results = model.recommend(
             ingredients=args.ingredients,
             top_n=args.top_n,
             min_coverage=args.min_coverage,
             meal_type=args.meal_type,
+            pre_bg=pre_bg,
         )
         _print_results(results)
     else:

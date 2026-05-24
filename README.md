@@ -94,10 +94,10 @@ python main.py
 ```
 
 ```
+식전 혈당 입력 (mg/dL, 80~130) 또는 'q' 종료: 118
 냉장고 재료 입력 (쉼표 구분): 감자, 양파, 당근
 식사 유형 (breakfast/lunch/dinner/snacks, 기본 lunch): lunch
 최소 재료 보유율 % (기본 50): 50
-제외할 등급 (예: 비권장 / 없으면 Enter):
 ```
 
 한국어, 영어 모두 입력 가능합니다. (`감자` = `potato`)
@@ -105,8 +105,8 @@ python main.py
 ### 비대화형 모드
 
 ```bash
-python main.py --ingredients 감자 양파 당근 --meal-type lunch --top-n 5
-python main.py --ingredients chicken garlic broccoli --min-coverage 0.4
+python main.py --ingredients 감자 양파 당근 --pre-bg 118 --meal-type lunch --top-n 5
+python main.py --ingredients chicken garlic broccoli --pre-bg 95 --min-coverage 0.4
 ```
 
 ### 모델 평가
