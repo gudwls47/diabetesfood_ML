@@ -2,26 +2,40 @@
 Diabetes suitability scorer.
 
 Scores each recipe 0-100 (higher = more diabetes-friendly).
-Uses sugar_%DV and carbohydrates_%DV from nutrition column,
-optionally enriched with actual sugar_g from USDA FoodData.
+Uses sugar_%DV and carbohydrates_%DV from the Food.com nutrition column.
 
-Scoring logic (rule-based thresholds from ADA dietary guidelines):
-  - sugar_pct  <=  5 %DV  ->  full sugar score
-  - carbs_pct  <= 15 %DV  ->  full carbs score
-  - protein_pct >= 10 %DV ->  bonus
-  - calories   <= 400      ->  bonus
+Scoring rationale
+-----------------
+ADA Standards of Care 2025/2026 (diabetesjournals.org/care) does NOT prescribe
+fixed per-meal %DV thresholds. Instead it states:
+  (1) Reducing overall carbohydrate intake shows the strongest evidence for
+      improving glycaemia.
+  (2) Minimise added sugars and refined grains.
+  (3) Target >= 14 g dietary fibre per 1,000 kcal.
+  (4) Nutrition plans must be individualised.
+
+Because the Food.com dataset stores nutrition as FDA %DV values (not grams),
+and fibre data is unavailable at the recipe level, we operationalise the ADA
+direction using the following empirical thresholds derived from the FDA %DV
+reference amounts (added sugars DV = 50 g; total carbs DV = 275 g):
+
+  sugar_pct  : low <10 %DV (~5 g), high >=50 %DV (~25 g)  -- minimise
+  carbs_pct  : low <16 %DV (~45 g/meal), high >=60 %DV    -- reduce
+  protein_pct: >=10 %DV bonus  (supports satiety)
+  calories   : <=400 kcal bonus (portion control)
+
+These are project-level approximations, not official ADA cut-offs.
 """
 
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
 
 
-# %DV thresholds for diabetes suitability
-SUGAR_LOW = 5      # ideal upper limit (%DV)
-SUGAR_HIGH = 25    # penalise heavily above this
-CARBS_LOW = 15
-CARBS_HIGH = 45
+# Empirical %DV thresholds (see module docstring for rationale)
+SUGAR_LOW = 10     # below this -> full sugar score
+SUGAR_HIGH = 50    # above this -> zero sugar score
+CARBS_LOW = 16     # below this -> full carbs score  (~45 g, ADA low-carb target)
+CARBS_HIGH = 60    # above this -> zero carbs score
 PROTEIN_BONUS_THRESH = 10
 CALORIE_BONUS_THRESH = 400
 

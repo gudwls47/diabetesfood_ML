@@ -57,7 +57,16 @@ python evaluate.py
 | 25-49 | 주의 필요 | 당분 또는 탄수화물 높음 |
 | 0-24 | 비권장 | 당분·탄수화물 모두 높음 |
 
-ADA(미국당뇨병학회) 식이 가이드라인 기준으로 산정.
+### 점수 산정 근거
+
+[ADA Standards of Care 2025](https://diabetesjournals.org/care/article/48/Supplement_1/S86/157563/5-Facilitating-Positive-Health-Behaviors-and-Well)는 특정 %DV 수치를 고정하지 않고, 아래 방향성만 제시합니다.
+
+- 탄수화물 섭취 줄이기 → 혈당 개선에 가장 효과적
+- 첨가당·정제 곡물 최소화
+- 식이섬유 최소 14g / 1,000kcal 권장
+- 개인별 맞춤 식단 권장 (고정 수치 없음)
+
+본 시스템의 임계값(sugar_pct, carbs_pct 기준선)은 FDA %DV 기준량(첨가당 DV=50g, 탄수화물 DV=275g)을 참고해 ADA의 방향성에 맞게 프로젝트 수준에서 설정한 **경험적 근사값**이며, ADA 공식 수치가 아닙니다.
 
 ## 프로젝트 구조
 
