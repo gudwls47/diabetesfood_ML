@@ -65,9 +65,13 @@
 
 | 파일 | 출처 | 용도 |
 |------|------|------|
-| `archive.zip` | [Food.com Recipes and Interactions (Kaggle)](https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions) | 레시피 23만 개 + 사용자 평점 |
+| `archive.zip` | [Food.com Recipes and Interactions (Kaggle)](https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions) | 사용자 평점 (협업 필터링용) |
 | `archive (1).zip` | [Food Nutrition Dataset (Kaggle)](https://www.kaggle.com/datasets/utsavdey1410/food-nutrition-dataset) | 2,395개 식품 영양성분 (실제 g값) |
-| `archive (2).zip` | [Food consumed and corresponding blood sugar change (Kaggle)](https://www.kaggle.com/datasets/suyashmaurya/food-consumed-and-corresponding-blood-sugar-change) | 실측 혈당 상승값 → 모델 학습 |
+| `archive (2).zip` | [Food consumed and corresponding blood sugar change (Kaggle)](https://www.kaggle.com/datasets/suyashmaurya/food-consumed-and-corresponding-blood-sugar-change) | 실측 혈당 상승값 → BG 모델 학습 |
+| `archive (3).zip` | [Cleaned Indian Recipes Dataset (Kaggle)](https://www.kaggle.com/datasets/sooryaprakash12/cleaned-indian-recipes-dataset) | 인도 레시피 5,938개 → 레시피 추천 |
+
+> `archive (3).zip`을 사용하는 이유: 혈당 학습 데이터(`archive (2).zip`)가 인도 음식 기반이므로
+> 같은 문화권 레시피를 사용하면 영양성분 분포가 일치해 혈당 예측 정확도가 높아집니다.
 
 ---
 
