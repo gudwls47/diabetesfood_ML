@@ -28,9 +28,9 @@ def build_recommender(
     archive3_path: str,
 ) -> DiabetesRecipeRecommender:
 
-    print("[1/3] 인도 레시피 로딩 중 ...")
-    recipes = load_indian_recipes(archive3_path)
-    print(f"      -> {len(recipes):,}개 완료")
+    print("[1/3] 인도 레시피 로딩 중 (CGM 실측 음식 기준 필터링) ...")
+    recipes = load_indian_recipes(archive3_path, archive2_path=archive2_path)
+    print(f"      -> {len(recipes):,}개 완료 (혈당 실측 데이터 있는 음식만)")
 
     print("[2/3] 영양성분 DB 로딩 중 ...")
     nutrition_db = load_nutrition_db(fooddata1_path)

@@ -15,6 +15,7 @@ nutrition column format (list of 7 floats):
    protein_%DV, sat_fat_%DV, carbohydrates_%DV]
 """
 
+import re
 import zipfile
 import ast
 import pandas as pd
@@ -67,13 +68,39 @@ def load_interactions(archive_path: str) -> pd.DataFrame:
     return df
 
 
-def load_indian_recipes(archive3_path: str, nrows: int = None) -> pd.DataFrame:
+def _extract_cgm_food_names(archive2_path: str) -> set[str]:
+    """
+    archive(2).zip food_data.csv에서 고유 음식명을 추출해 반환.
+    예) "Idly (120 gm), Sambar (100 gm)" -> {'idly', 'sambar'}
+    """
+    with zipfile.ZipFile(archive2_path) as z:
+        with z.open("food_data.csv") as f:
+            food_df = pd.read_csv(f)
+
+    names = set()
+    for items in food_df["Food Items"]:
+        for part in str(items).split(","):
+            name = re.sub(r"\(.*?\)", "", part).strip().lower()
+            if name:
+                names.add(name)
+    return names
+
+
+def load_indian_recipes(
+    archive3_path: str,
+    archive2_path: str = None,
+    nrows: int = None,
+) -> pd.DataFrame:
     """
     Load Cleaned_Indian_Food_Dataset.csv from archive (3).zip.
 
-    Returns DataFrame with same key columns as load_recipes():
-      name, ingredients (list), ingredients_str, cuisine, cook_time_mins
-    so it can be used as a drop-in replacement for the Food.com dataset.
+    Parameters
+    ----------
+    archive3_path : path to archive (3).zip (Indian recipes)
+    archive2_path : optional. If provided, only recipes whose name
+                   matches foods in archive(2).zip CGM data are returned.
+                   이렇게 하면 실제 혈당 측정 데이터가 있는 음식만 추천됩니다.
+    nrows         : limit rows (for testing)
 
     Source: https://www.kaggle.com/datasets/sooryaprakash12/cleaned-indian-recipes-dataset
     """
@@ -89,17 +116,24 @@ def load_indian_recipes(archive3_path: str, nrows: int = None) -> pd.DataFrame:
         "Cuisine": "cuisine",
     })
 
+    # CGM 음식 기반 필터링
+    if archive2_path:
+        cgm_foods = _extract_cgm_food_names(archive2_path)
+        name_lower = df["name"].str.lower()
+        mask = name_lower.apply(
+            lambda rname: any(food in rname or rname in food for food in cgm_foods)
+        )
+        df = df[mask].reset_index(drop=True)
+
     # Parse comma-separated ingredient string -> Python list
     df["ingredients"] = df["ingredients_str"].apply(
         lambda x: [i.strip() for i in str(x).split(",") if i.strip()]
     )
 
-    # Add placeholder nutrition columns so recommender doesn't break
-    # (actual nutrition is looked up from archive(1).zip per recipe)
+    # Add placeholder nutrition columns
     for col in ["calories", "sugar_pct", "carbs_pct", "protein_pct"]:
         df[col] = np.nan
 
-    # Add sequential id
     df = df.reset_index(drop=True)
     df["id"] = df.index
 
