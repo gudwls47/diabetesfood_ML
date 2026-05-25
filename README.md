@@ -28,10 +28,9 @@
 
 | 단계 | 방식 | 데이터 출처 |
 |------|------|------------|
-| 1 | **재료 매칭** | 서브스트링 매칭으로 보유 재료로 만들 수 있는 레시피 필터링 | Food.com |
-| 2 | **영양성분 계산** | 재료별 탄수화물·식이섬유·당류·단백질·지방 합산 | 식품 영양성분 DB |
-| 3 | **혈당 상승 예측** | Random Forest 회귀 모델 | CGM + 식사 일지 |
-| 4 | **협업 필터링** | Truncated SVD (Matrix Factorization) 개인화 | Food.com 사용자 평점 |
+| 1 | **재료 매칭** | 서브스트링 매칭으로 만들 수 있는 레시피 필터링 | archive (3).zip |
+| 2 | **영양성분 계산** | 재료별 탄수화물·식이섬유·당류·단백질·지방 합산 | archive (1).zip |
+| 3 | **혈당 상승 예측** | Random Forest 회귀 모델 | archive (2).zip |
 
 ### 혈당 예측 모델 상세
 
@@ -65,12 +64,11 @@
 
 | 파일 | 출처 | 용도 |
 |------|------|------|
-| `archive.zip` | [Food.com Recipes and Interactions (Kaggle)](https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions) | 사용자 평점 (협업 필터링용) |
 | `archive (1).zip` | [Food Nutrition Dataset (Kaggle)](https://www.kaggle.com/datasets/utsavdey1410/food-nutrition-dataset) | 2,395개 식품 영양성분 (실제 g값) |
 | `archive (2).zip` | [Food consumed and corresponding blood sugar change (Kaggle)](https://www.kaggle.com/datasets/suyashmaurya/food-consumed-and-corresponding-blood-sugar-change) | 실측 혈당 상승값 → BG 모델 학습 |
 | `archive (3).zip` | [Cleaned Indian Recipes Dataset (Kaggle)](https://www.kaggle.com/datasets/sooryaprakash12/cleaned-indian-recipes-dataset) | 인도 레시피 5,938개 → 레시피 추천 |
 
-> `archive (3).zip`을 사용하는 이유: 혈당 학습 데이터(`archive (2).zip`)가 인도 음식 기반이므로
+> **인도 레시피를 사용하는 이유**: 혈당 학습 데이터(`archive (2).zip`)가 인도 음식 기반이므로
 > 같은 문화권 레시피를 사용하면 영양성분 분포가 일치해 혈당 예측 정확도가 높아집니다.
 
 ---
@@ -86,9 +84,9 @@ pip install -r requirements.txt
 `main.py` 상단의 경로를 본인 환경에 맞게 수정하세요.
 
 ```python
-DEFAULT_ARCHIVE   = r"경로\archive.zip"
 DEFAULT_FOODDATA1 = r"경로\archive (1).zip"
 DEFAULT_ARCHIVE2  = r"경로\archive (2).zip"
+DEFAULT_ARCHIVE3  = r"경로\archive (3).zip"
 ```
 
 ### 대화형 모드
@@ -126,12 +124,11 @@ python evaluate.py
 ```
 diabetes_ml/
 ├── src/
-│   ├── data_loader.py        # Food.com 레시피·평점 데이터 로딩
+│   ├── data_loader.py        # 인도 레시피 데이터 로딩
 │   ├── translator.py         # 한국어 재료명 → 영어 변환 딕셔너리
 │   ├── ingredient_matcher.py # 재료 보유율 계산 및 레시피 필터링
 │   ├── nutrition_db.py       # 식품 영양성분 DB 로딩 및 재료 매칭
 │   ├── bg_model.py           # CGM 데이터 기반 혈당 상승 회귀 모델
-│   ├── collaborative.py      # SVD 협업 필터링 (개인화)
 │   └── recommender.py        # 전체 파이프라인 통합
 ├── main.py                   # 실행 진입점 (대화형 / CLI)
 ├── evaluate.py               # 모델 평가 (RMSE, CB 정확도)
