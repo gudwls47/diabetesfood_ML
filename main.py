@@ -60,6 +60,13 @@ def _print_results(results):
     for i, row in results.iterrows():
         print(f"\n[{i+1}] {row['name']}")
         print(f"     재료 보유율    : {row['coverage']*100:.0f}%")
+        # 부족한 재료 표시
+        missing = row.get('missing_ingredients', [])
+        if missing:
+            missing_str = ", ".join(missing[:5])
+            if len(missing) > 5:
+                missing_str += f" 외 {len(missing)-5}개"
+            print(f"     추가 필요 재료 : {missing_str}")
         print(f"     탄수화물       : {row['carbs_g']:.1f}g  |  "
               f"식이섬유: {row['fiber_g']:.1f}g  |  "
               f"순 탄수화물: {row['net_carbs_g']:.1f}g")

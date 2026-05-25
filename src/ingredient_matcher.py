@@ -43,6 +43,25 @@ def compute_coverage(
     return covered / len(recipe_ingredients)
 
 
+def get_missing_ingredients(
+    recipe_ingredients: list[str],
+    user_ingredients: list[str],
+) -> list[str]:
+    """Return list of recipe ingredients the user does NOT have."""
+    user_tokens = set()
+    for ing in user_ingredients:
+        user_tokens |= _tokenize(ing)
+
+    return [
+        ri for ri in recipe_ingredients
+        if not _ingredient_covered(ri, user_tokens)
+    ]
+
+
+# 자동 완화 단계: 결과 없을 때 순서대로 시도
+_FALLBACK_THRESHOLDS = [0.5, 0.3, 0.2, 0.1]
+
+
 def filter_makeable_recipes(
     recipes_df: pd.DataFrame,
     user_ingredients: list[str],
@@ -50,23 +69,63 @@ def filter_makeable_recipes(
 ) -> pd.DataFrame:
     """
     Return recipes where the user has at least `min_coverage` fraction
-    of the required ingredients, sorted by coverage descending.
+    of the required ingredients.
 
-    Parameters
-    ----------
-    recipes_df      : DataFrame with 'ingredients' column (list of strings)
-    user_ingredients: list of ingredient strings the user has available
-    min_coverage    : minimum fraction of recipe ingredients the user must have
-                      (default 0.5 = can make if you have half the ingredients)
+    재료가 적어 결과가 없을 경우 임계값을 자동으로 낮춰 재시도합니다.
+    (0.5 → 0.3 → 0.2 → 0.1)
 
     Returns
     -------
-    Filtered and sorted DataFrame with added 'coverage' column.
+    DataFrame with added columns:
+      coverage          : fraction of recipe ingredients the user has (0-1)
+      missing_ingredients: list of ingredients the user still needs
+      applied_coverage  : actual threshold used (완화된 경우 변경됨)
     """
     df = recipes_df.copy()
     df["coverage"] = df["ingredients"].apply(
         lambda ings: compute_coverage(ings, user_ingredients)
     )
-    df = df[df["coverage"] >= min_coverage]
-    df = df.sort_values("coverage", ascending=False).reset_index(drop=True)
-    return df
+
+    # 자동 임계값 완화
+    thresholds = sorted(
+        set([min_coverage] + [t for t in _FALLBACK_THRESHOLDS if t <= min_coverage]),
+        reverse=True,
+    )
+    # min_coverage보다 낮은 fallback도 포함
+    all_thresholds = sorted(
+        set([min_coverage] + _FALLBACK_THRESHOLDS),
+        reverse=True,
+    )
+
+    MIN_RESULTS = 5   # 최소 이 개수 이상 나올 때까지 임계값 완화
+
+    applied = min_coverage
+    result = pd.DataFrame()
+    for threshold in all_thresholds:
+        filtered = df[df["coverage"] >= threshold]
+        if len(filtered) >= MIN_RESULTS:
+            result = filtered
+            applied = threshold
+            break
+        # 마지막 임계값(0.1)까지 왔는데도 부족하면 있는 것만 반환
+        if threshold == all_thresholds[-1] and not filtered.empty:
+            result = filtered
+            applied = threshold
+
+    if result.empty:
+        return result
+
+    # 부족한 재료 계산
+    result = result.copy()
+    result["missing_ingredients"] = result["ingredients"].apply(
+        lambda ings: get_missing_ingredients(ings, user_ingredients)
+    )
+    result["applied_coverage"] = applied
+    result = result.sort_values("coverage", ascending=False).reset_index(drop=True)
+
+    # 임계값이 완화된 경우 사용자에게 알림
+    if applied < min_coverage:
+        print(f"  [안내] 재료 보유율 {int(min_coverage*100)}% 기준으로는 결과가 없어 "
+              f"{int(applied*100)}%로 완화했습니다.")
+
+    return result

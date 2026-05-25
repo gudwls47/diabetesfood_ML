@@ -136,7 +136,7 @@ class DiabetesRecipeRecommender:
         )
 
         return result[[
-            "name", "coverage",
+            "name", "coverage", "missing_ingredients",
             "carbs_g", "sugar_g", "fiber_g", "net_carbs_g",
             "bg_rise_mg_dl", "post_meal_bg",
             "suitability", "suitability_desc",
