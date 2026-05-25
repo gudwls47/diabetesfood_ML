@@ -1,9 +1,14 @@
 """
 Data loading and preprocessing for diabetes-friendly recipe recommender.
 
-archive.zip
-  - RAW_recipes.csv  : name, id, ingredients, nutrition, tags, steps
-  - interactions_train.csv : user_id, recipe_id, rating
+archive.zip  (Food.com - Western)
+  - RAW_recipes.csv         : name, id, ingredients, nutrition, tags, steps
+  - interactions_train.csv  : user_id, recipe_id, rating
+
+archive (3).zip  (Cleaned Indian Food Dataset - Kaggle)
+  - Cleaned_Indian_Food_Dataset.csv
+    columns: TranslatedRecipeName, Cleaned-Ingredients, TotalTimeInMins,
+             Cuisine, TranslatedInstructions, Ingredient-count
 
 nutrition column format (list of 7 floats):
   [calories, total_fat_%DV, sugar_%DV, sodium_%DV,
@@ -60,6 +65,50 @@ def load_interactions(archive_path: str) -> pd.DataFrame:
     df = df[["user_id", "recipe_id", "rating"]].dropna()
     df["rating"] = df["rating"].astype(float)
     return df
+
+
+def load_indian_recipes(archive3_path: str, nrows: int = None) -> pd.DataFrame:
+    """
+    Load Cleaned_Indian_Food_Dataset.csv from archive (3).zip.
+
+    Returns DataFrame with same key columns as load_recipes():
+      name, ingredients (list), ingredients_str, cuisine, cook_time_mins
+    so it can be used as a drop-in replacement for the Food.com dataset.
+
+    Source: https://www.kaggle.com/datasets/sooryaprakash12/cleaned-indian-recipes-dataset
+    """
+    with zipfile.ZipFile(archive3_path) as z:
+        with z.open("Cleaned_Indian_Food_Dataset.csv") as f:
+            df = pd.read_csv(f, nrows=nrows)
+
+    # Rename to unified column names
+    df = df.rename(columns={
+        "TranslatedRecipeName": "name",
+        "Cleaned-Ingredients": "ingredients_str",
+        "TotalTimeInMins": "cook_time_mins",
+        "Cuisine": "cuisine",
+    })
+
+    # Parse comma-separated ingredient string -> Python list
+    df["ingredients"] = df["ingredients_str"].apply(
+        lambda x: [i.strip() for i in str(x).split(",") if i.strip()]
+    )
+
+    # Add placeholder nutrition columns so recommender doesn't break
+    # (actual nutrition is looked up from archive(1).zip per recipe)
+    for col in ["calories", "sugar_pct", "carbs_pct", "protein_pct"]:
+        df[col] = np.nan
+
+    # Add sequential id
+    df = df.reset_index(drop=True)
+    df["id"] = df.index
+
+    df = df.dropna(subset=["name", "ingredients_str"]).reset_index(drop=True)
+    return df[[
+        "id", "name", "ingredients", "ingredients_str",
+        "cuisine", "cook_time_mins",
+        "calories", "sugar_pct", "carbs_pct", "protein_pct",
+    ]]
 
 
 def load_food_nutrients(fooddata_path: str) -> pd.DataFrame:

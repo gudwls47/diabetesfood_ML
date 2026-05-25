@@ -1,5 +1,5 @@
 from .recommender import DiabetesRecipeRecommender
-from .data_loader import load_recipes, load_interactions, load_food_nutrients
+from .data_loader import load_recipes, load_indian_recipes, load_interactions, load_food_nutrients
 from .nutrition_db import load_nutrition_db, estimate_recipe_nutrition
 from .bg_model import BGRiseModel
 from .translator import translate_ingredient, translate_ingredients

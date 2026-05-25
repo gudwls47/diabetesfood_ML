@@ -12,26 +12,32 @@
 """
 
 import argparse
-from src.data_loader import load_recipes, load_interactions
+from src.data_loader import load_recipes, load_indian_recipes, load_interactions
 from src.nutrition_db import load_nutrition_db
 from src.recommender import DiabetesRecipeRecommender
 
 DEFAULT_ARCHIVE      = r"C:\Users\gudwl\Downloads\archive.zip"
 DEFAULT_FOODDATA1    = r"C:\Users\gudwl\Downloads\archive (1).zip"
 DEFAULT_ARCHIVE2     = r"C:\Users\gudwl\Downloads\archive (2).zip"
+DEFAULT_ARCHIVE3     = r"C:\Users\gudwl\Downloads\archive (3).zip"  # 인도 레시피
 
 
 def build_recommender(
     archive_path: str,
     fooddata1_path: str,
     archive2_path: str,
+    archive3_path: str = None,
     max_recipes: int = 50_000,
     use_cf: bool = True,
 ) -> DiabetesRecipeRecommender:
 
-    print(f"[1/4] 레시피 로딩 중 (최대 {max_recipes:,}개) ...")
-    recipes = load_recipes(archive_path, nrows=max_recipes)
-    print(f"      -> {len(recipes):,}개 완료")
+    print(f"[1/4] 레시피 로딩 중 ...")
+    if archive3_path:
+        recipes = load_indian_recipes(archive3_path, nrows=max_recipes)
+        print(f"      -> 인도 레시피 {len(recipes):,}개 완료 (혈당 예측 정확도 향상)")
+    else:
+        recipes = load_recipes(archive_path, nrows=max_recipes)
+        print(f"      -> Food.com 레시피 {len(recipes):,}개 완료")
 
     print("[2/4] 영양성분 DB 로딩 중 ...")
     nutrition_db = load_nutrition_db(fooddata1_path)
@@ -168,6 +174,7 @@ def main():
 
     model = build_recommender(
         args.archive, args.fooddata1, args.archive2,
+        DEFAULT_ARCHIVE3,
         args.max_recipes, not args.no_cf,
     )
 
