@@ -65,9 +65,9 @@
 
 | 파일 | 출처 | 용도 |
 |------|------|------|
-| `archive.zip` | [Food.com Recipes & Interactions (Kaggle)](https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions) | 레시피 23만 개 + 사용자 평점 |
-| `archive (1).zip` | [식품 영양성분 데이터셋 (Kaggle)](https://www.kaggle.com/) | 2,395개 식품 영양성분 (실제 g값) |
-| `archive (2).zip` | 개인 CGM + 식사 일지 데이터 | 실측 혈당 상승값 → 모델 학습 |
+| `archive.zip` | [Food.com Recipes and Interactions (Kaggle)](https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions) | 레시피 23만 개 + 사용자 평점 |
+| `archive (1).zip` | [Food Nutrition Dataset (Kaggle)](https://www.kaggle.com/datasets/utsavdey1410/food-nutrition-dataset) | 2,395개 식품 영양성분 (실제 g값) |
+| `archive (2).zip` | [Food consumed and corresponding blood sugar change (Kaggle)](https://www.kaggle.com/datasets/suyashmaurya/food-consumed-and-corresponding-blood-sugar-change) | 실측 혈당 상승값 → 모델 학습 |
 
 ---
 
