@@ -93,8 +93,7 @@ def estimate_recipe_nutrition(
     """
     Estimate total nutritional content for a recipe by summing ingredient values.
 
-    Since Food.com recipes don't include gram amounts, we use a fixed
-    default of 100g per ingredient as an approximation.
+    재료당 100g 기준으로 영양소를 합산합니다.
 
     Returns dict with total nutrient values and match_rate (0-1).
     """
