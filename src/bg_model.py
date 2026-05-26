@@ -1,28 +1,29 @@
 """
 Blood glucose rise lookup model.
 
-archive(2).zip CGM + 식사 기록에서 음식별 실측 평균 BG rise를 추출해
-레시피 이름 매칭으로 혈당 상승을 예측합니다.
+archive(2)와 archive(5)를 계층적으로 결합하여 혈당 상승을 예측합니다.
 
-방식
-----
-1. archive(2) food_data.csv 의 각 식사 기록에서:
+우선순위
+-------
+1. archive(2) CGM 실측값  : 레시피명 매칭 -> 실측 평균 BG rise (mg/dL)
+2. archive(5) GI 추정값   : 레시피명 매칭 -> GI 구간별 BG rise 추정 (mg/dL)
+3. 전체 평균 fallback      : 매칭 실패 시 archive(2) 전체 평균 사용
+
+archive(2) 방식
+--------------
+1. food_data.csv 각 식사 기록에서:
    - 식전 혈당 = 식사 직전 CGM 측정값
    - 식후 혈당 = 식사 후 30분~2시간 내 최고 CGM 측정값
    - BG rise   = 식후 혈당 - 식전 혈당
-2. 식사에 포함된 각 음식에 해당 BG rise를 연결
-3. 음식별 평균 BG rise 딕셔너리 구성
-4. 추천 레시피 이름과 매칭해 BG rise 반환
+2. 음식별 평균 BG rise 딕셔너리 구성
 
-예시
-----
-  archive(2) 측정:
-    "Veg Biryani (150 gm), Raita (100 gm)"  → +48 mg/dL
-    "Veg Biryani (100 gm), Salad (50 gm)"   → +42 mg/dL
-  => "veg biryani" 평균 BG rise = 45 mg/dL
-
-주의: 식사에 여러 음식이 있으면 각 음식에 동일한 BG rise가 연결됩니다.
-      개인차가 크므로 참고용으로만 활용하세요.
+archive(5) GI 방식
+------------------
+1. pred_food.csv 에서 음식별 평균 GI 로드
+2. GI 구간으로 BG rise 추정:
+   GI < 55  -> 15 mg/dL  (낮음)
+   GI 55-69 -> 25 mg/dL  (중간)
+   GI >= 70 -> 40 mg/dL  (높음)
 """
 
 import re
@@ -33,10 +34,6 @@ import pandas as pd
 def _build_bg_rise_lookup(archive2_path: str) -> dict[str, float]:
     """
     archive(2) 실측 데이터에서 음식별 평균 BG rise(mg/dL) 딕셔너리를 생성합니다.
-
-    Returns
-    -------
-    dict: {음식명(소문자): 평균 BG rise}
     """
     with zipfile.ZipFile(archive2_path) as z:
         with z.open("blood_sugar_data.csv") as f:
@@ -88,61 +85,114 @@ def _build_bg_rise_lookup(archive2_path: str) -> dict[str, float]:
     }
 
 
+def _build_gi_lookup(archive5_path: str) -> dict[str, float]:
+    """
+    archive(5) pred_food.csv에서 음식별 평균 GI 딕셔너리를 생성합니다.
+    중복 음식명은 GI 평균으로 처리합니다.
+    """
+    with zipfile.ZipFile(archive5_path) as z:
+        with z.open("pred_food.csv") as f:
+            df = pd.read_csv(f)
+
+    gi_dict: dict[str, float] = {}
+    for name, grp in df.groupby("Food Name"):
+        gi_dict[name.lower()] = round(grp["Glycemic Index"].mean(), 1)
+    return gi_dict
+
+
+def _gi_to_bg_rise(gi: float) -> float:
+    """GI 구간 -> 혈당 상승 추정값 (mg/dL)"""
+    if gi < 55:
+        return 15.0   # 낮은 GI
+    elif gi < 70:
+        return 25.0   # 중간 GI
+    else:
+        return 40.0   # 높은 GI
+
+
 class BGRiseModel:
     """
-    archive(2) 실측 데이터 기반 혈당 상승 예측 모델.
+    archive(2) CGM 실측 + archive(5) GI 계층적 혈당 상승 예측 모델.
 
-    레시피 이름 → archive(2) 음식명 매칭 → 실측 평균 BG rise 반환.
+    레시피 이름 매칭 순서:
+      1순위 archive(2) -> 실측 평균 BG rise (mg/dL)
+      2순위 archive(5) -> GI 구간별 BG rise 추정 (mg/dL)
+      3순위 전체 평균  -> archive(2) 전체 평균 fallback
     """
 
     def __init__(self):
-        self._lookup: dict[str, float] = {}  # {food_name: mean_bg_rise}
+        self._lookup: dict[str, float]    = {}   # {food_name: mean_bg_rise}
+        self._gi_lookup: dict[str, float] = {}   # {food_name: mean_gi}
         self._fitted = False
 
-    def fit(self, archive2_path: str = None, **kwargs) -> "BGRiseModel":
-        """archive(2)에서 음식별 BG rise 데이터를 로딩합니다."""
+    def fit(
+        self,
+        archive2_path: str = None,
+        archive5_path: str = None,
+        **kwargs,
+    ) -> "BGRiseModel":
+        """archive(2) 실측 데이터와 archive(5) GI 데이터를 로딩합니다."""
         if archive2_path:
             self._lookup = _build_bg_rise_lookup(archive2_path)
+        if archive5_path:
+            self._gi_lookup = _build_gi_lookup(archive5_path)
         self._fitted = True
         return self
 
-    def predict_by_name(self, recipe_name: str) -> float:
+    def predict_by_name(self, recipe_name: str) -> tuple[float, str]:
         """
-        레시피 이름으로 archive(2) 실측 BG rise를 조회합니다.
+        레시피 이름으로 BG rise를 조회합니다.
 
-        매칭 방식: archive(2) 음식명이 레시피 이름에 포함되거나 그 반대인 경우.
-        미매칭 시 전체 평균값을 반환합니다.
+        Returns
+        -------
+        (bg_rise_mg_dl, source)
+          'cgm'  - archive(2) CGM 실측값
+          'gi'   - archive(5) GI 기반 추정값
+          'mean' - archive(2) 전체 평균 (매칭 실패)
         """
         name_lower = recipe_name.lower()
+
+        # 1순위: archive(2) CGM 실측값
         for food, rise in self._lookup.items():
             if food in name_lower or name_lower in food:
-                return rise
+                return rise, "cgm"
 
-        # 매칭 실패 시 전체 평균
+        # 2순위: archive(5) GI 추정값
+        for food, gi in self._gi_lookup.items():
+            if food in name_lower or name_lower in food:
+                return _gi_to_bg_rise(gi), "gi"
+
+        # 3순위: 전체 평균 fallback
         if self._lookup:
-            return round(sum(self._lookup.values()) / len(self._lookup), 1)
-        return 20.0
+            return round(sum(self._lookup.values()) / len(self._lookup), 1), "mean"
+        return 20.0, "mean"
 
-    def classify(self, bg_rise: float, pre_bg: float = 110.0) -> tuple[str, str, float]:
+    def classify(
+        self,
+        bg_rise: float,
+        pre_bg: float = 110.0,
+        source: str = "cgm",
+    ) -> tuple[str, str, float]:
         """
         식후 2시간 혈당을 계산하여 대한당뇨병학회 기준으로 적합/부적합 판정.
 
         기준 (출처: 대한당뇨병학회 https://www.diabetes.or.kr)
           - 식전 혈당 목표: 80~130 mg/dL
           - 식후 2시간 혈당 목표: 180 mg/dL 미만
-
-        판정 로직
-          post_meal_bg = pre_bg + bg_rise
-          < 180 mg/dL  -> 적합
-          >= 180 mg/dL -> 부적합
         """
         post_meal_bg = round(pre_bg + bg_rise, 1)
+        src_label = {
+            "cgm":  "CGM 실측",
+            "gi":   "GI 추정",
+            "mean": "평균 추정",
+        }.get(source, source)
+
         if post_meal_bg < 180:
             label = "적합"
             desc  = (f"식후 혈당 예측 {post_meal_bg:.0f} mg/dL "
-                     f"(기준 180 미만 -- 목표 달성)")
+                     f"(기준 180 미만 -- 목표 달성) [{src_label}]")
         else:
             label = "부적합"
             desc  = (f"식후 혈당 예측 {post_meal_bg:.0f} mg/dL "
-                     f"(기준 180 초과 -- {post_meal_bg - 180:.0f} mg/dL 초과)")
+                     f"(기준 180 초과 -- {post_meal_bg - 180:.0f} mg/dL 초과) [{src_label}]")
         return label, desc, post_meal_bg

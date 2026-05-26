@@ -10,6 +10,9 @@ archive (3).zip  (Cleaned Indian Food Dataset - Kaggle)
     columns: TranslatedRecipeName, Cleaned-Ingredients, TotalTimeInMins,
              Cuisine, TranslatedInstructions, Ingredient-count
 
+archive (5).zip  (Food GI + Diabetes Suitability DB)
+  - pred_food.csv : Food Name, Glycemic Index, Suitable for Diabetes, ...
+
 Source: https://www.kaggle.com/datasets/sooryaprakash12/cleaned-indian-recipes-dataset
 """
 
@@ -37,9 +40,21 @@ def _extract_cgm_food_names(archive2_path: str) -> set[str]:
     return names
 
 
+def _extract_gi_food_names(archive5_path: str) -> set[str]:
+    """
+    archive(5).zip pred_food.csv에서 고유 음식명을 추출해 반환.
+    """
+    with zipfile.ZipFile(archive5_path) as z:
+        with z.open("pred_food.csv") as f:
+            df = pd.read_csv(f)
+
+    return set(df["Food Name"].str.lower().unique())
+
+
 def load_indian_recipes(
     archive3_path: str,
     archive2_path: str = None,
+    archive5_path: str = None,
     nrows: int = None,
 ) -> pd.DataFrame:
     """
@@ -48,9 +63,9 @@ def load_indian_recipes(
     Parameters
     ----------
     archive3_path : path to archive (3).zip (Indian recipes)
-    archive2_path : optional. If provided, only recipes whose name
-                   matches foods in archive(2).zip CGM data are returned.
-                   이렇게 하면 실제 혈당 측정 데이터가 있는 음식만 추천됩니다.
+    archive2_path : optional. archive(2) CGM 음식명 기준 필터링.
+    archive5_path : optional. archive(5) GI DB 음식명 기준 필터링 (archive2와 합집합).
+                   둘 다 제공 시 archive(2) OR archive(5)에 있는 레시피를 모두 포함.
     nrows         : limit rows (for testing)
 
     Source: https://www.kaggle.com/datasets/sooryaprakash12/cleaned-indian-recipes-dataset
@@ -67,12 +82,17 @@ def load_indian_recipes(
         "Cuisine": "cuisine",
     })
 
-    # CGM 음식 기반 필터링
+    # 음식명 기반 필터링: archive(2) OR archive(5) 합집합
+    food_names: set[str] = set()
     if archive2_path:
-        cgm_foods = _extract_cgm_food_names(archive2_path)
+        food_names |= _extract_cgm_food_names(archive2_path)
+    if archive5_path:
+        food_names |= _extract_gi_food_names(archive5_path)
+
+    if food_names:
         name_lower = df["name"].str.lower()
         mask = name_lower.apply(
-            lambda rname: any(food in rname or rname in food for food in cgm_foods)
+            lambda rname: any(food in rname or rname in food for food in food_names)
         )
         df = df[mask].reset_index(drop=True)
 

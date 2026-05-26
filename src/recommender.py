@@ -3,16 +3,20 @@ Diabetes-friendly recipe recommender — full pipeline.
 
 Data sources
 ------------
-- archive (1).zip : Per-food nutritional values (carbs, fiber, sugar …)
-- archive (2).zip : Real CGM + meal diary -> 음식별 실측 BG rise 조회
+- archive (1).zip : Per-food nutritional values (carbs, fiber, sugar ...)
+- archive (2).zip : Real CGM + meal diary -> 음식별 실측 BG rise 조회 (1순위)
 - archive (3).zip : Cleaned Indian recipes (5,938개)
+- archive (5).zip : Food GI DB -> GI 기반 BG rise 추정 (2순위 fallback)
 
 Flow
 ----
 1. Korean -> English translation  (translator.py)
 2. Ingredient coverage filter     (ingredient_matcher.py)
 3. Per-recipe nutrition estimate  (nutrition_db.py)
-4. BG rise lookup                 (bg_model.py — archive(2) 실측값 매칭)
+4. BG rise lookup                 (bg_model.py)
+   - 1순위: archive(2) CGM 실측값
+   - 2순위: archive(5) GI 추정값
+   - 3순위: archive(2) 전체 평균
 5. Diabetes suitability label     (bg_model.BGRiseModel.classify)
 6. Rank by coverage and return
 """
@@ -39,22 +43,27 @@ class DiabetesRecipeRecommender:
         recipes_df: pd.DataFrame,
         nutrition_db: pd.DataFrame,
         archive2_path: str = None,
+        archive5_path: str = None,
     ) -> "DiabetesRecipeRecommender":
         """
         Parameters
         ----------
         recipes_df    : output of load_indian_recipes()
         nutrition_db  : output of load_nutrition_db()
-        archive2_path : archive(2).zip 경로 — BG rise 실측 데이터 로딩에 사용
+        archive2_path : archive(2).zip 경로 -- CGM 실측 BG rise 로딩
+        archive5_path : archive(5).zip 경로 -- GI 기반 BG rise 추정 (fallback)
         """
         self.recipes_df = recipes_df.reset_index(drop=True)
         self.nutrition_db = nutrition_db
 
-        if archive2_path:
-            self.bg_model.fit(archive2_path=archive2_path)
+        if archive2_path or archive5_path:
+            self.bg_model.fit(
+                archive2_path=archive2_path,
+                archive5_path=archive5_path,
+            )
             self._bg_fitted = True
-            print(f"      BG 데이터 로딩 완료 "
-                  f"({len(self.bg_model._lookup)}개 음식 실측값)")
+            print(f"      CGM 실측: {len(self.bg_model._lookup)}개 음식  |  "
+                  f"GI DB: {len(self.bg_model._gi_lookup)}개 음식")
 
         return self
 
@@ -74,7 +83,7 @@ class DiabetesRecipeRecommender:
         ----------
         ingredients         : Korean or English ingredient list
         top_n               : number of results
-        min_coverage        : minimum ingredient coverage (0–1)
+        min_coverage        : minimum ingredient coverage (0-1)
         meal_type           : 'breakfast'|'lunch'|'dinner'|'snacks'
         pre_bg              : pre-meal blood glucose (mg/dL)
         exclude_suitability : e.g. ['부적합'] to hide unsuitable recipes
@@ -94,18 +103,19 @@ class DiabetesRecipeRecommender:
         for _, row in candidates.iterrows():
             nutr = estimate_recipe_nutrition(row["ingredients"], self.nutrition_db)
             if self._bg_fitted:
-                # archive(2) 실측값 기반 BG rise 조회
-                bg_rise = self.bg_model.predict_by_name(row["name"])
-                label, desc, post_bg = self.bg_model.classify(bg_rise, pre_bg)
+                bg_rise, source = self.bg_model.predict_by_name(row["name"])
+                label, desc, post_bg = self.bg_model.classify(bg_rise, pre_bg, source)
             else:
                 bg_rise = None
                 post_bg = None
+                source  = None
                 label, desc = "정보 없음", "BG 데이터 없음"
             nutrition_rows.append({
                 **nutr,
-                "bg_rise_mg_dl": bg_rise,
-                "post_meal_bg": post_bg,
-                "suitability": label,
+                "bg_rise_mg_dl":  bg_rise,
+                "post_meal_bg":   post_bg,
+                "bg_source":      source,
+                "suitability":    label,
                 "suitability_desc": desc,
             })
 
@@ -135,7 +145,7 @@ class DiabetesRecipeRecommender:
         return result[[
             "name", "coverage", "missing_ingredients",
             "carbs_g", "sugar_g", "fiber_g", "net_carbs_g",
-            "bg_rise_mg_dl", "post_meal_bg",
+            "bg_rise_mg_dl", "post_meal_bg", "bg_source",
             "suitability", "suitability_desc",
             "calories", "ingredients",
         ]]
