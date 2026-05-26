@@ -3,7 +3,7 @@
 
 평가 항목
 ---------
-1. 혈당 예측 공식 파라미터 출력
+1. archive(2) 실측 BG rise 데이터 통계
 2. 레시피 추천 적합성 분포: 당뇨 적합 / 부적합 비율 (샘플 레시피 기준)
 """
 
@@ -12,25 +12,26 @@ import pandas as pd
 
 from src.data_loader import load_indian_recipes
 from src.nutrition_db import load_nutrition_db, estimate_recipe_nutrition
-from src.bg_model import BGRiseModel, BASE_RISE, CARB_FACTOR, MAX_RISE
+from src.bg_model import BGRiseModel
 
 DEFAULT_FOODDATA1 = r"C:\Users\gudwl\Downloads\archive (1).zip"
 DEFAULT_ARCHIVE2  = r"C:\Users\gudwl\Downloads\archive (2).zip"
 DEFAULT_ARCHIVE3  = r"C:\Users\gudwl\Downloads\archive (3).zip"
 
 
-def show_formula():
-    """혈당 예측 공식 파라미터를 출력합니다."""
-    print("\n[1] 혈당 상승 예측 공식")
+def show_bg_lookup_stats(model: BGRiseModel):
+    """archive(2) 실측 BG rise 데이터 통계를 출력합니다."""
+    print("\n[1] archive(2) 실측 혈당 데이터 통계")
     print("-" * 50)
-    print(f"  BG_rise = {BASE_RISE} + net_carbs_g x {CARB_FACTOR}  (상한 {MAX_RISE} mg/dL)")
-    print(f"  예시)")
-    examples = [(10, 110), (50, 110), (100, 110), (150, 120), (180, 120)]
-    for nc, pre in examples:
-        rise = min(MAX_RISE, BASE_RISE + nc * CARB_FACTOR)
-        post = pre + rise
-        label = "부적합" if post >= 180 else "적합"
-        print(f"    net_carbs {nc:3g}g + 식전 {pre} -> +{rise:.0f} -> 식후 {post:.0f} [{label}]")
+    rises = list(model._lookup.values())
+    s = pd.Series(rises)
+    print(f"  수록 음식 수 : {len(rises)}개")
+    print(f"  BG rise 범위 : {s.min():.1f} ~ {s.max():.1f} mg/dL")
+    print(f"  평균 / 중간값 : {s.mean():.1f} / {s.median():.1f} mg/dL")
+    print()
+    print("  상위 10개 (혈당 많이 올리는 음식):")
+    for food, rise in sorted(model._lookup.items(), key=lambda x: -x[1])[:10]:
+        print(f"    {food:30s}: +{rise:.1f} mg/dL")
 
 
 def evaluate_recommendations(
@@ -49,8 +50,7 @@ def evaluate_recommendations(
 
     labels = []
     for _, row in sample.iterrows():
-        nutr   = estimate_recipe_nutrition(row["ingredients"], nutrition_db)
-        rise   = model.predict(nutr, meal_type, pre_bg)
+        rise = model.predict_by_name(row["name"])
         label, _, _ = model.classify(rise, pre_bg)
         labels.append(label)
 
@@ -81,9 +81,9 @@ if __name__ == "__main__":
     print(f"  레시피: {len(recipes):,}개  |  영양 DB: {len(nutrition_db):,}개 식품\n")
 
     bg_model = BGRiseModel()
-    bg_model.fit()
+    bg_model.fit(archive2_path=args.archive2)
 
-    show_formula()
+    show_bg_lookup_stats(bg_model)
     evaluate_recommendations(
         recipes, nutrition_db, bg_model,
         n_queries=args.n_queries,
