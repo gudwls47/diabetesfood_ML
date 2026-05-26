@@ -6,7 +6,7 @@
   python main.py
 
 식전 혈당과 재료를 한국어 또는 영어로 입력하면:
-  1. 그 재료로 만들 수 있는 인도 레시피 추천
+  1. 그 재료로 만들 수 있는 Food.com 레시피 추천 (231,637개)
   2. 레시피별 예상 혈당 상승값 (mg/dL) 예측
      (CGMacros 45명 실측 데이터로 학습한 Gradient Boosting 모델)
   3. 대한당뇨병학회 기준으로 당뇨 적합 여부 판정
@@ -14,34 +14,27 @@
 """
 
 import argparse
-from src.data_loader import load_indian_recipes
-from src.nutrition_db import load_nutrition_db
+from src.data_loader import load_foodcom_recipes
 from src.recommender import DiabetesRecipeRecommender
 
-DEFAULT_FOODDATA1 = r"C:\Users\gudwl\Downloads\archive (1).zip"
-DEFAULT_ARCHIVE3  = r"C:\Users\gudwl\Downloads\archive (3).zip"
-DEFAULT_CGMACROS  = r"C:\Users\gudwl\Downloads\CGMacros_dateshifted365.zip"
+DEFAULT_ARCHIVE_FOOD = r"C:\Users\gudwl\Downloads\archive.zip"
+DEFAULT_CGMACROS     = r"C:\Users\gudwl\Downloads\CGMacros_dateshifted365.zip"
 
 
 def build_recommender(
-    fooddata1_path: str,
-    archive3_path: str,
+    archive_food_path: str,
     cgmacros_path: str,
+    diabetic_only: bool = False,
 ) -> DiabetesRecipeRecommender:
 
-    print("[1/3] 인도 레시피 로딩 중 ...")
-    recipes = load_indian_recipes(archive3_path)
+    print("[1/2] Food.com 레시피 로딩 중 ...")
+    recipes = load_foodcom_recipes(archive_food_path, diabetic_only=diabetic_only)
     print(f"      -> {len(recipes):,}개 완료")
 
-    print("[2/3] 영양성분 DB 로딩 중 ...")
-    nutrition_db = load_nutrition_db(fooddata1_path)
-    print(f"      -> {len(nutrition_db):,}개 식품 완료")
-
-    print("[3/3] CGMacros 데이터로 BG 예측 모델 학습 중 ...")
+    print("[2/2] CGMacros 데이터로 BG 예측 모델 학습 중 ...")
     model = DiabetesRecipeRecommender()
     model.fit(
         recipes_df=recipes,
-        nutrition_db=nutrition_db,
         cgmacros_path=cgmacros_path,
     )
     print("      -> 완료!\n")
@@ -127,17 +120,23 @@ def interactive_session(model: DiabetesRecipeRecommender):
 
 def main():
     parser = argparse.ArgumentParser(description="당뇨 레시피 추천 ML 시스템")
-    parser.add_argument("--fooddata1",    default=DEFAULT_FOODDATA1)
-    parser.add_argument("--archive3",     default=DEFAULT_ARCHIVE3)
-    parser.add_argument("--cgmacros",     default=DEFAULT_CGMACROS)
-    parser.add_argument("--ingredients",  nargs="+")
-    parser.add_argument("--pre-bg",       type=float, default=None)
-    parser.add_argument("--meal-type",    default="lunch")
-    parser.add_argument("--top-n",        type=int,   default=10)
-    parser.add_argument("--min-coverage", type=float, default=0.5)
+    parser.add_argument("--archive-food",  default=DEFAULT_ARCHIVE_FOOD,
+                        help="Food.com archive.zip 경로")
+    parser.add_argument("--cgmacros",      default=DEFAULT_CGMACROS)
+    parser.add_argument("--diabetic-only", action="store_true",
+                        help="당뇨/저탄수화물 태그 레시피만 로드 (~45,000개)")
+    parser.add_argument("--ingredients",   nargs="+")
+    parser.add_argument("--pre-bg",        type=float, default=None)
+    parser.add_argument("--meal-type",     default="lunch")
+    parser.add_argument("--top-n",         type=int,   default=10)
+    parser.add_argument("--min-coverage",  type=float, default=0.5)
     args = parser.parse_args()
 
-    model = build_recommender(args.fooddata1, args.archive3, args.cgmacros)
+    model = build_recommender(
+        args.archive_food,
+        args.cgmacros,
+        diabetic_only=args.diabetic_only,
+    )
 
     if args.ingredients:
         pre_bg = args.pre_bg if args.pre_bg is not None else float(

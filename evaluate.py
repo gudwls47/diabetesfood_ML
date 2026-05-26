@@ -12,14 +12,12 @@
 import argparse
 import pandas as pd
 
-from src.data_loader import load_indian_recipes
-from src.nutrition_db import load_nutrition_db, estimate_recipe_nutrition
+from src.data_loader import load_foodcom_recipes
 from src.bg_model import BGRiseModel
 from src.cgmacros_loader import load_cgmacros
 
-DEFAULT_FOODDATA1 = r"C:\Users\gudwl\Downloads\archive (1).zip"
-DEFAULT_ARCHIVE3  = r"C:\Users\gudwl\Downloads\archive (3).zip"
-DEFAULT_CGMACROS  = r"C:\Users\gudwl\Downloads\CGMacros_dateshifted365.zip"
+DEFAULT_ARCHIVE_FOOD = r"C:\Users\gudwl\Downloads\archive.zip"
+DEFAULT_CGMACROS     = r"C:\Users\gudwl\Downloads\CGMacros_dateshifted365.zip"
 
 
 def show_data_stats(cgmacros_path: str):
@@ -66,7 +64,6 @@ def show_feature_importance(model: BGRiseModel):
 
 def evaluate_recommendations(
     recipes_df: pd.DataFrame,
-    nutrition_db: pd.DataFrame,
     model: BGRiseModel,
     n_queries: int = 200,
     pre_bg: float = 110.0,
@@ -80,7 +77,14 @@ def evaluate_recommendations(
 
     labels = []
     for _, row in sample.iterrows():
-        nutr = estimate_recipe_nutrition(row["ingredients"], nutrition_db)
+        nutr = {
+            "carbs_g":     float(row.get("carbs_g",     0) or 0),
+            "protein_g":   float(row.get("protein_g",   0) or 0),
+            "fat_g":       float(row.get("fat_g",       0) or 0),
+            "fiber_g":     float(row.get("fiber_g",     0) or 0),
+            "net_carbs_g": float(row.get("net_carbs_g", 0) or 0),
+            "calories":    float(row.get("calories",    0) or 0),
+        }
         bg_rise = model.predict_from_nutrition(nutr, meal_type=meal_type, pre_bg=pre_bg)
         label, _, _ = model.classify(bg_rise, pre_bg)
         labels.append(label)
@@ -97,19 +101,20 @@ def evaluate_recommendations(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="당뇨 레시피 추천 모델 평가")
-    parser.add_argument("--fooddata1",  default=DEFAULT_FOODDATA1)
-    parser.add_argument("--archive3",   default=DEFAULT_ARCHIVE3)
-    parser.add_argument("--cgmacros",   default=DEFAULT_CGMACROS)
-    parser.add_argument("--pre-bg",     type=float, default=110.0)
-    parser.add_argument("--n-queries",  type=int,   default=200)
-    parser.add_argument("--skip-cv",    action="store_true",
+    parser.add_argument("--archive-food",  default=DEFAULT_ARCHIVE_FOOD,
+                        help="Food.com archive.zip 경로")
+    parser.add_argument("--cgmacros",      default=DEFAULT_CGMACROS)
+    parser.add_argument("--diabetic-only", action="store_true",
+                        help="당뇨/저탄수화물 태그 레시피만 평가")
+    parser.add_argument("--pre-bg",        type=float, default=110.0)
+    parser.add_argument("--n-queries",     type=int,   default=200)
+    parser.add_argument("--skip-cv",       action="store_true",
                         help="교차검증 생략 (느림)")
     args = parser.parse_args()
 
     print("데이터 로딩 중 ...")
-    recipes      = load_indian_recipes(args.archive3)
-    nutrition_db = load_nutrition_db(args.fooddata1)
-    print(f"  레시피: {len(recipes):,}개  |  영양 DB: {len(nutrition_db):,}개 식품")
+    recipes = load_foodcom_recipes(args.archive_food, diabetic_only=args.diabetic_only)
+    print(f"  레시피: {len(recipes):,}개")
 
     bg_model = BGRiseModel()
 
@@ -124,7 +129,7 @@ if __name__ == "__main__":
 
     show_feature_importance(bg_model)
     evaluate_recommendations(
-        recipes, nutrition_db, bg_model,
+        recipes, bg_model,
         n_queries=args.n_queries,
         pre_bg=args.pre_bg,
     )

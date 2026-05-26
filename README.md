@@ -1,6 +1,6 @@
 # 당뇨 환자를 위한 냉장고 레시피 추천 시스템
 
-냉장고 재료(한국어/영어)를 입력하면 만들 수 있는 인도 레시피를 추천하고,
+냉장고 재료(한국어/영어)를 입력하면 만들 수 있는 레시피를 추천하고,
 45명의 실제 CGM 데이터로 학습한 ML 모델이 예상 혈당 상승값과 당뇨 적합 여부를 알려줍니다.
 
 ---
@@ -10,13 +10,13 @@
 ```
 입력: "감자, 양파, 당근"
   ↓ 한국어 → 영어 변환 (potato, onion, carrot)
-  ↓ 인도 레시피 5,938개에서 재료 보유율 필터링
+  ↓ Food.com 레시피 231,637개에서 재료 보유율 필터링
     (기본 50%, 결과 없으면 자동 완화: 50→30→20→10%)
-  ↓ 식품 영양성분 DB에서 탄수화물·식이섬유·단백질 계산
+  ↓ 레시피에 내장된 영양성분 사용 (칼로리·탄수화물·단백질·지방)
   ↓ Gradient Boosting 모델로 혈당 상승 예측
   ↓
 [결과]
-  레시피명       : Aloo Gobi
+  레시피명       : Potato Carrot Soup
   재료 보유율    : 60%
   순 탄수화물    : 21.3g
   혈당 상승 예측 : +35 mg/dL -> 식후 혈당 145 mg/dL
@@ -31,8 +31,8 @@
 
 | 단계 | 내용 | 데이터 출처 |
 |------|------|------------|
-| 1 | **재료 매칭** | 서브스트링 매칭으로 만들 수 있는 레시피 필터링 (5,938개 전체 대상) | archive (3).zip |
-| 2 | **영양성분 계산** | 재료별 탄수화물·식이섬유·당류·단백질·지방 합산 | archive (1).zip |
+| 1 | **재료 매칭** | 서브스트링 매칭으로 만들 수 있는 레시피 필터링 (231,637개 전체 대상) | archive.zip |
+| 2 | **영양성분** | 레시피에 내장된 칼로리·탄수화물·단백질·지방 직접 사용 | archive.zip |
 | 3 | **혈당 상승 예측** | Gradient Boosting 회귀 모델 | CGMacros.zip |
 | 4 | **당뇨 적합성 판정** | 식후 2시간 혈당 180 mg/dL 기준 (대한당뇨병학회) | - |
 
@@ -97,9 +97,11 @@ BG rise   = 식후 최고값 - 식전값
 
 | 파일 | 출처 | 용도 |
 |------|------|------|
-| `archive (1).zip` | [Food Nutrition Dataset (Kaggle)](https://www.kaggle.com/datasets/utsavdey1410/food-nutrition-dataset) | 2,395개 식품 영양성분 |
-| `archive (3).zip` | [Cleaned Indian Recipes Dataset (Kaggle)](https://www.kaggle.com/datasets/sooryaprakash12/cleaned-indian-recipes-dataset) | 인도 레시피 5,938개 |
+| `archive.zip` | [Food.com Recipes Dataset (Kaggle)](https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions) | 레시피 231,637개 + 내장 영양성분 |
 | `CGMacros_dateshifted365.zip` | [PhysioNet CGMacros v1.0.0](https://physionet.org/content/cgmacros/1.0.0/) | 45명 CGM + 식사 기록 — ML 모델 학습 |
+
+> **Food.com 영양성분**: calories, carbs, fat, protein, sugar (%DV → g 변환).
+> 식이섬유 데이터가 없어 fiber_g = 0, net_carbs_g = carbs_g 로 처리합니다.
 
 ---
 
@@ -114,9 +116,8 @@ pip install -r requirements.txt
 `main.py` 상단의 경로를 본인 환경에 맞게 수정하세요.
 
 ```python
-DEFAULT_FOODDATA1 = r"경로\archive (1).zip"
-DEFAULT_ARCHIVE3  = r"경로\archive (3).zip"
-DEFAULT_CGMACROS  = r"경로\CGMacros_dateshifted365.zip"
+DEFAULT_ARCHIVE_FOOD = r"경로\archive.zip"
+DEFAULT_CGMACROS     = r"경로\CGMacros_dateshifted365.zip"
 ```
 
 ### 대화형 모드
@@ -141,6 +142,12 @@ python main.py --ingredients 감자 양파 당근 --pre-bg 118 --meal-type lunch
 python main.py --ingredients chicken garlic broccoli --pre-bg 95 --min-coverage 0.4
 ```
 
+당뇨/저탄수화물 태그 레시피만 빠르게 로드하려면:
+
+```bash
+python main.py --diabetic-only --ingredients chicken broccoli --pre-bg 110
+```
+
 ### 모델 평가
 
 ```bash
@@ -157,10 +164,9 @@ CGMacros 데이터 통계, 5-fold 교차검증 RMSE, 특성 중요도, 레시피
 diabetes_ml/
 ├── src/
 │   ├── cgmacros_loader.py    # CGMacros 45명 CSV 파싱, 식사별 BG rise 추출
-│   ├── data_loader.py        # 인도 레시피 로딩 (5,938개 전체)
+│   ├── data_loader.py        # Food.com 레시피 로딩 (231,637개, 영양성분 내장)
 │   ├── translator.py         # 한국어 재료명 -> 영어 변환 딕셔너리
 │   ├── ingredient_matcher.py # 재료 보유율 계산 및 레시피 필터링 (자동 임계값 완화)
-│   ├── nutrition_db.py       # 식품 영양성분 DB 로딩 및 재료별 영양 추정
 │   ├── bg_model.py           # Gradient Boosting BG rise 예측 모델
 │   └── recommender.py        # 전체 파이프라인 통합
 ├── main.py                   # 실행 진입점 (대화형 / CLI)

@@ -3,15 +3,14 @@ Diabetes-friendly recipe recommender — full pipeline.
 
 Data sources
 ------------
-- archive (1).zip  : Per-food nutritional values (carbs, fiber, sugar ...)
-- archive (3).zip  : Cleaned Indian recipes (5,938개)
+- archive.zip      : Food.com 레시피 231,637개 (영양성분 포함)
 - CGMacros zip     : 45명 CGM + 식사 영양성분 데이터 -> BG rise ML 모델 학습
 
 Flow
 ----
 1. Korean -> English translation   (translator.py)
 2. Ingredient coverage filter      (ingredient_matcher.py)
-3. Per-recipe nutrition estimate   (nutrition_db.py)
+3. Embedded nutrition from recipe  (칼로리·탄수화물·단백질·지방 직접 사용)
 4. BG rise prediction              (bg_model.BGRiseModel)
    - Gradient Boosting: carbs, protein, fat, fiber, pre_bg -> BG rise
 5. Diabetes suitability label      (bg_model.BGRiseModel.classify)
@@ -22,7 +21,6 @@ import pandas as pd
 
 from .translator import translate_ingredients
 from .ingredient_matcher import filter_makeable_recipes
-from .nutrition_db import estimate_recipe_nutrition
 from .bg_model import BGRiseModel
 
 _SUIT_RANK = {"적합": 0, "부적합": 1}
@@ -30,26 +28,24 @@ _SUIT_RANK = {"적합": 0, "부적합": 1}
 
 class DiabetesRecipeRecommender:
     def __init__(self):
-        self.bg_model    = BGRiseModel()
-        self.recipes_df  = None
-        self.nutrition_db = None
-        self._bg_fitted  = False
+        self.bg_model   = BGRiseModel()
+        self.recipes_df = None
+        self._bg_fitted = False
 
     def fit(
         self,
         recipes_df: pd.DataFrame,
-        nutrition_db: pd.DataFrame,
         cgmacros_path: str = None,
     ) -> "DiabetesRecipeRecommender":
         """
         Parameters
         ----------
-        recipes_df    : output of load_indian_recipes()
-        nutrition_db  : output of load_nutrition_db()
+        recipes_df    : output of load_foodcom_recipes()
+                        (nutrition columns already embedded: calories, carbs_g,
+                         fat_g, protein_g, sugar_g, fiber_g, net_carbs_g)
         cgmacros_path : CGMacros_dateshifted365.zip 경로
         """
-        self.recipes_df   = recipes_df.reset_index(drop=True)
-        self.nutrition_db = nutrition_db
+        self.recipes_df = recipes_df.reset_index(drop=True)
 
         if cgmacros_path:
             self.bg_model.fit(cgmacros_path=cgmacros_path)
@@ -90,10 +86,21 @@ class DiabetesRecipeRecommender:
         if candidates.empty:
             return candidates
 
-        # Step 3: estimate nutrition + predict BG for each candidate
-        nutrition_rows = []
+        # Step 3: predict BG rise using embedded nutrition columns
+        bg_rise_list  = []
+        post_bg_list  = []
+        label_list    = []
+        desc_list     = []
+
         for _, row in candidates.iterrows():
-            nutr = estimate_recipe_nutrition(row["ingredients"], self.nutrition_db)
+            nutr = {
+                "carbs_g":     float(row.get("carbs_g",     0) or 0),
+                "protein_g":   float(row.get("protein_g",   0) or 0),
+                "fat_g":       float(row.get("fat_g",       0) or 0),
+                "fiber_g":     float(row.get("fiber_g",     0) or 0),
+                "net_carbs_g": float(row.get("net_carbs_g", 0) or 0),
+                "calories":    float(row.get("calories",    0) or 0),
+            }
 
             if self._bg_fitted:
                 bg_rise = self.bg_model.predict_from_nutrition(
@@ -105,17 +112,16 @@ class DiabetesRecipeRecommender:
                 post_bg = None
                 label, desc = "정보 없음", "BG 모델 미학습"
 
-            nutrition_rows.append({
-                **nutr,
-                "bg_rise_mg_dl":    bg_rise,
-                "post_meal_bg":     post_bg,
-                "suitability":      label,
-                "suitability_desc": desc,
-            })
+            bg_rise_list.append(bg_rise)
+            post_bg_list.append(post_bg)
+            label_list.append(label)
+            desc_list.append(desc)
 
-        nutr_df    = pd.DataFrame(nutrition_rows)
         candidates = candidates.reset_index(drop=True)
-        candidates = pd.concat([candidates, nutr_df], axis=1)
+        candidates["bg_rise_mg_dl"]    = bg_rise_list
+        candidates["post_meal_bg"]     = post_bg_list
+        candidates["suitability"]      = label_list
+        candidates["suitability_desc"] = desc_list
 
         # Step 4: exclude unwanted suitability labels
         if exclude_suitability:
