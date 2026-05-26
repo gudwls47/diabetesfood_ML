@@ -7,7 +7,8 @@
 
 식전 혈당과 재료를 한국어 또는 영어로 입력하면:
   1. 그 재료로 만들 수 있는 인도 레시피 추천
-  2. 레시피별 예상 혈당 상승값 (mg/dL) 계산
+  2. 레시피별 예상 혈당 상승값 (mg/dL) 예측
+     (CGMacros 45명 실측 데이터로 학습한 Gradient Boosting 모델)
   3. 대한당뇨병학회 기준으로 당뇨 적합 여부 판정
      (식후 2시간 혈당 180 mg/dL 미만 -> 적합)
 """
@@ -18,37 +19,30 @@ from src.nutrition_db import load_nutrition_db
 from src.recommender import DiabetesRecipeRecommender
 
 DEFAULT_FOODDATA1 = r"C:\Users\gudwl\Downloads\archive (1).zip"
-DEFAULT_ARCHIVE2  = r"C:\Users\gudwl\Downloads\archive (2).zip"
 DEFAULT_ARCHIVE3  = r"C:\Users\gudwl\Downloads\archive (3).zip"
-DEFAULT_ARCHIVE5  = r"C:\Users\gudwl\Downloads\archive (5).zip"
+DEFAULT_CGMACROS  = r"C:\Users\gudwl\Downloads\CGMacros_dateshifted365.zip"
 
 
 def build_recommender(
     fooddata1_path: str,
-    archive2_path: str,
     archive3_path: str,
-    archive5_path: str,
+    cgmacros_path: str,
 ) -> DiabetesRecipeRecommender:
 
-    print("[1/3] 인도 레시피 로딩 중 (CGM + GI DB 음식 기준 필터링) ...")
-    recipes = load_indian_recipes(
-        archive3_path,
-        archive2_path=archive2_path,
-        archive5_path=archive5_path,
-    )
+    print("[1/3] 인도 레시피 로딩 중 ...")
+    recipes = load_indian_recipes(archive3_path)
     print(f"      -> {len(recipes):,}개 완료")
 
     print("[2/3] 영양성분 DB 로딩 중 ...")
     nutrition_db = load_nutrition_db(fooddata1_path)
     print(f"      -> {len(nutrition_db):,}개 식품 완료")
 
-    print("[3/3] 혈당 데이터 로딩 중 (CGM 실측 + GI DB) ...")
+    print("[3/3] CGMacros 데이터로 BG 예측 모델 학습 중 ...")
     model = DiabetesRecipeRecommender()
     model.fit(
         recipes_df=recipes,
         nutrition_db=nutrition_db,
-        archive2_path=archive2_path,
-        archive5_path=archive5_path,
+        cgmacros_path=cgmacros_path,
     )
     print("      -> 완료!\n")
     return model
@@ -67,8 +61,7 @@ def _print_results(results):
     for i, row in results.iterrows():
         print(f"\n[{i+1}] {row['name']}")
         print(f"     재료 보유율    : {row['coverage']*100:.0f}%")
-        # 부족한 재료 표시
-        missing = row.get('missing_ingredients', [])
+        missing = row.get("missing_ingredients", [])
         if missing:
             missing_str = ", ".join(missing[:5])
             if len(missing) > 5:
@@ -77,17 +70,14 @@ def _print_results(results):
         print(f"     탄수화물       : {row['carbs_g']:.1f}g  |  "
               f"식이섬유: {row['fiber_g']:.1f}g  |  "
               f"순 탄수화물: {row['net_carbs_g']:.1f}g")
-        if row['bg_rise_mg_dl'] is not None:
-            src = row.get('bg_source', '')
-            src_label = {"cgm": "CGM 실측", "gi": "GI 추정", "mean": "평균 추정"}.get(src, "")
+        if row["bg_rise_mg_dl"] is not None:
             print(f"     혈당 상승 예측 : +{row['bg_rise_mg_dl']:.0f} mg/dL  "
-                  f"-> 식후 혈당 {row['post_meal_bg']:.0f} mg/dL  [{src_label}]")
+                  f"-> 식후 혈당 {row['post_meal_bg']:.0f} mg/dL")
         print(f"     당뇨 적합성    : [{row['suitability']}]  {row['suitability_desc']}")
 
     print(f"\n{'='*65}")
     print("※ 판정 기준: 식후 2시간 혈당 180 mg/dL 미만 (대한당뇨병학회)")
-    print("  [CGM 실측] archive(2) 실측값  |  [GI 추정] archive(5) GI 기반  |  [평균 추정] fallback")
-    print("  개인차가 크므로 참고용으로만 활용하세요.")
+    print("  CGMacros 45명 실측 데이터 기반 -- 개인차가 크므로 참고용으로만 활용하세요.")
 
 
 def interactive_session(model: DiabetesRecipeRecommender):
@@ -97,7 +87,6 @@ def interactive_session(model: DiabetesRecipeRecommender):
     print("=" * 65)
 
     while True:
-        # 1. 식전 혈당
         print()
         pre_bg_raw = input("식전 혈당 입력 (mg/dL, 80~130) 또는 'q' 종료: ").strip()
         if pre_bg_raw.lower() == "q":
@@ -114,16 +103,14 @@ def interactive_session(model: DiabetesRecipeRecommender):
             print("  숫자로 입력해주세요.")
             continue
 
-        # 2. 냉장고 재료
         raw = input("냉장고 재료 입력 (쉼표 구분): ").strip()
         ingredients = [i.strip() for i in raw.split(",") if i.strip()]
         if not ingredients:
             print("재료를 하나 이상 입력해주세요.")
             continue
 
-        # 3. 식사 유형
-        meal = input("식사 유형 (breakfast/lunch/dinner/snacks, 기본 lunch): ").strip()
-        meal = meal if meal else "lunch"
+        meal = input("식사 유형 (breakfast/lunch/dinner, 기본 lunch): ").strip()
+        meal = meal if meal in ("breakfast", "lunch", "dinner") else "lunch"
 
         cov = input("최소 재료 보유율 % (기본 50): ").strip()
         min_cov = float(cov) / 100 if cov else 0.5
@@ -140,21 +127,17 @@ def interactive_session(model: DiabetesRecipeRecommender):
 
 def main():
     parser = argparse.ArgumentParser(description="당뇨 레시피 추천 ML 시스템")
-    parser.add_argument("--fooddata1",   default=DEFAULT_FOODDATA1)
-    parser.add_argument("--archive2",    default=DEFAULT_ARCHIVE2)
-    parser.add_argument("--archive3",    default=DEFAULT_ARCHIVE3)
-    parser.add_argument("--archive5",    default=DEFAULT_ARCHIVE5)
-    parser.add_argument("--ingredients", nargs="+")
-    parser.add_argument("--pre-bg",      type=float, default=None,
-                        help="식전 혈당 (mg/dL)")
-    parser.add_argument("--meal-type",   default="lunch")
-    parser.add_argument("--top-n",       type=int, default=10)
+    parser.add_argument("--fooddata1",    default=DEFAULT_FOODDATA1)
+    parser.add_argument("--archive3",     default=DEFAULT_ARCHIVE3)
+    parser.add_argument("--cgmacros",     default=DEFAULT_CGMACROS)
+    parser.add_argument("--ingredients",  nargs="+")
+    parser.add_argument("--pre-bg",       type=float, default=None)
+    parser.add_argument("--meal-type",    default="lunch")
+    parser.add_argument("--top-n",        type=int,   default=10)
     parser.add_argument("--min-coverage", type=float, default=0.5)
     args = parser.parse_args()
 
-    model = build_recommender(
-        args.fooddata1, args.archive2, args.archive3, args.archive5
-    )
+    model = build_recommender(args.fooddata1, args.archive3, args.cgmacros)
 
     if args.ingredients:
         pre_bg = args.pre_bg if args.pre_bg is not None else float(

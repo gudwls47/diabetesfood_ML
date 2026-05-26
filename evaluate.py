@@ -3,129 +3,128 @@
 
 평가 항목
 ---------
-1. archive(2) 실측 BG rise 데이터 통계
-2. archive(5) GI 데이터 통계
-3. 레시피 추천 적합성 분포: 당뇨 적합 / 부적합 비율 (샘플 레시피 기준)
-4. 혈당 예측 출처별 커버리지 (CGM 실측 / GI 추정 / 평균 추정)
+1. CGMacros 데이터 통계 (참여자 수, 식사 수, BG rise 분포)
+2. 5-fold 교차검증 RMSE
+3. 특성 중요도
+4. 레시피 추천 적합성 분포 (당뇨 적합 / 부적합 비율)
 """
 
 import argparse
 import pandas as pd
 
 from src.data_loader import load_indian_recipes
-from src.nutrition_db import load_nutrition_db
+from src.nutrition_db import load_nutrition_db, estimate_recipe_nutrition
 from src.bg_model import BGRiseModel
+from src.cgmacros_loader import load_cgmacros
 
 DEFAULT_FOODDATA1 = r"C:\Users\gudwl\Downloads\archive (1).zip"
-DEFAULT_ARCHIVE2  = r"C:\Users\gudwl\Downloads\archive (2).zip"
 DEFAULT_ARCHIVE3  = r"C:\Users\gudwl\Downloads\archive (3).zip"
-DEFAULT_ARCHIVE5  = r"C:\Users\gudwl\Downloads\archive (5).zip"
+DEFAULT_CGMACROS  = r"C:\Users\gudwl\Downloads\CGMacros_dateshifted365.zip"
 
 
-def show_bg_lookup_stats(model: BGRiseModel):
-    """archive(2) 실측 BG rise 데이터 통계를 출력합니다."""
-    print("\n[1] archive(2) 실측 혈당 데이터 통계")
+def show_data_stats(cgmacros_path: str):
+    """CGMacros 데이터 통계를 출력합니다."""
+    print("\n[1] CGMacros 데이터 통계")
     print("-" * 50)
-    rises = list(model._lookup.values())
-    s = pd.Series(rises)
-    print(f"  수록 음식 수 : {len(rises)}개")
-    print(f"  BG rise 범위 : {s.min():.1f} ~ {s.max():.1f} mg/dL")
-    print(f"  평균 / 중간값 : {s.mean():.1f} / {s.median():.1f} mg/dL")
+    df = load_cgmacros(cgmacros_path)
+    s = df["bg_rise"]
+    print(f"  총 식사 기록    : {len(df)}건")
+    print(f"  BG rise 범위   : {s.min():.1f} ~ {s.max():.1f} mg/dL")
+    print(f"  평균 / 중간값   : {s.mean():.1f} / {s.median():.1f} mg/dL")
     print()
-    print("  상위 10개 (혈당 많이 올리는 음식):")
-    for food, rise in sorted(model._lookup.items(), key=lambda x: -x[1])[:10]:
-        print(f"    {food:30s}: +{rise:.1f} mg/dL")
+    print(f"  식사 유형별 분포:")
+    for mtype, cnt in df["meal_type"].value_counts().items():
+        print(f"    {mtype:12s}: {cnt}건  "
+              f"(BG rise 평균 {df.loc[df['meal_type']==mtype,'bg_rise'].mean():.1f} mg/dL)")
+    print()
+    print(f"  탄수화물 분포 (순탄수화물):")
+    q = df["net_carbs_g"].describe()
+    print(f"    평균 {q['mean']:.1f}g  |  중간값 {q['50%']:.1f}g  |  "
+          f"범위 {q['min']:.1f}~{q['max']:.1f}g")
+    return df
 
 
-def show_gi_stats(model: BGRiseModel):
-    """archive(5) GI 데이터 통계를 출력합니다."""
-    print("\n[2] archive(5) GI 데이터 통계")
+def show_cv_rmse(model: BGRiseModel, cgmacros_path: str):
+    """5-fold 교차검증 RMSE를 출력합니다."""
+    print("\n[2] 5-fold 교차검증 성능")
     print("-" * 50)
-    gi_values = list(model._gi_lookup.values())
-    s = pd.Series(gi_values)
-    low  = (s < 55).sum()
-    mid  = ((s >= 55) & (s < 70)).sum()
-    high = (s >= 70).sum()
-    print(f"  수록 음식 수 : {len(gi_values)}개")
-    print(f"  GI 범위      : {s.min():.0f} ~ {s.max():.0f}")
-    print(f"  평균 / 중간값 : {s.mean():.1f} / {s.median():.1f}")
-    print()
-    print(f"  GI 구간 분포:")
-    print(f"    낮음 (GI < 55)   : {low}개  -> BG rise 추정 +15 mg/dL")
-    print(f"    중간 (GI 55-69)  : {mid}개  -> BG rise 추정 +25 mg/dL")
-    print(f"    높음 (GI >= 70)  : {high}개  -> BG rise 추정 +40 mg/dL")
-    print()
-    print("  GI 상위 10개 (혈당 많이 올리는 음식):")
-    for food, gi in sorted(model._gi_lookup.items(), key=lambda x: -x[1])[:10]:
-        print(f"    {food:30s}: GI {gi:.0f}")
+    print("  계산 중...", end="", flush=True)
+    mean_rmse, std_rmse = model.cv_rmse(cgmacros_path)
+    print(f"\r  RMSE: {mean_rmse:.2f} +/- {std_rmse:.2f} mg/dL")
+    print(f"  (낮을수록 좋음 — 혈당 예측 오차)")
+
+
+def show_feature_importance(model: BGRiseModel):
+    """특성 중요도를 출력합니다."""
+    print("\n[3] 특성 중요도 (BG rise 예측에 미치는 영향)")
+    print("-" * 50)
+    fi = model.feature_importances()
+    for feat, imp in fi.items():
+        bar = "#" * int(imp * 50)
+        print(f"  {feat:15s}: {imp:.3f}  {bar}")
 
 
 def evaluate_recommendations(
     recipes_df: pd.DataFrame,
+    nutrition_db: pd.DataFrame,
     model: BGRiseModel,
     n_queries: int = 200,
     pre_bg: float = 110.0,
+    meal_type: str = "lunch",
 ):
-    """샘플 레시피에 대한 당뇨 적합성 분포와 예측 출처를 출력합니다."""
-    print("\n[3] 레시피 추천 적합성 분포 평가")
+    """샘플 레시피에 대한 당뇨 적합성 분포를 출력합니다."""
+    print(f"\n[4] 레시피 추천 적합성 분포 (식전 혈당 {pre_bg:.0f} mg/dL 기준)")
     print("-" * 50)
 
     sample = recipes_df.sample(n=min(n_queries, len(recipes_df)), random_state=42)
 
-    labels  = []
-    sources = []
+    labels = []
     for _, row in sample.iterrows():
-        bg_rise, source = model.predict_by_name(row["name"])
-        label, _, _ = model.classify(bg_rise, pre_bg, source)
+        nutr = estimate_recipe_nutrition(row["ingredients"], nutrition_db)
+        bg_rise = model.predict_from_nutrition(nutr, meal_type=meal_type, pre_bg=pre_bg)
+        label, _, _ = model.classify(bg_rise, pre_bg)
         labels.append(label)
-        sources.append(source)
 
     total      = len(labels)
     suitable   = labels.count("적합")
     unsuitable = labels.count("부적합")
-    src_cgm    = sources.count("cgm")
-    src_gi     = sources.count("gi")
-    src_mean   = sources.count("mean")
 
-    print(f"  평가 레시피 수  : {total}개 (식전 혈당 {pre_bg:.0f} mg/dL 기준)")
+    print(f"  평가 레시피 수  : {total}개")
     print(f"  적합            : {suitable}개 ({suitable / total * 100:.1f}%)")
     print(f"  부적합          : {unsuitable}개 ({unsuitable / total * 100:.1f}%)")
     print(f"  판정 기준       : 식후 2시간 혈당 180 mg/dL 미만 (대한당뇨병학회)")
-    print()
-    print(f"  예측 출처 분포:")
-    print(f"    [CGM 실측]  archive(2) : {src_cgm}개 ({src_cgm / total * 100:.1f}%)")
-    print(f"    [GI 추정]   archive(5) : {src_gi}개 ({src_gi / total * 100:.1f}%)")
-    print(f"    [평균 추정] fallback   : {src_mean}개 ({src_mean / total * 100:.1f}%)")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="당뇨 레시피 추천 모델 평가")
-    parser.add_argument("--fooddata1", default=DEFAULT_FOODDATA1)
-    parser.add_argument("--archive2",  default=DEFAULT_ARCHIVE2)
-    parser.add_argument("--archive3",  default=DEFAULT_ARCHIVE3)
-    parser.add_argument("--archive5",  default=DEFAULT_ARCHIVE5)
-    parser.add_argument("--pre-bg",    type=float, default=110.0,
-                        help="평가 기준 식전 혈당 (mg/dL)")
-    parser.add_argument("--n-queries", type=int,   default=200,
-                        help="적합성 평가에 사용할 레시피 수")
+    parser.add_argument("--fooddata1",  default=DEFAULT_FOODDATA1)
+    parser.add_argument("--archive3",   default=DEFAULT_ARCHIVE3)
+    parser.add_argument("--cgmacros",   default=DEFAULT_CGMACROS)
+    parser.add_argument("--pre-bg",     type=float, default=110.0)
+    parser.add_argument("--n-queries",  type=int,   default=200)
+    parser.add_argument("--skip-cv",    action="store_true",
+                        help="교차검증 생략 (느림)")
     args = parser.parse_args()
 
     print("데이터 로딩 중 ...")
-    recipes = load_indian_recipes(
-        args.archive3,
-        archive2_path=args.archive2,
-        archive5_path=args.archive5,
-    )
+    recipes      = load_indian_recipes(args.archive3)
     nutrition_db = load_nutrition_db(args.fooddata1)
-    print(f"  레시피: {len(recipes):,}개  |  영양 DB: {len(nutrition_db):,}개 식품\n")
+    print(f"  레시피: {len(recipes):,}개  |  영양 DB: {len(nutrition_db):,}개 식품")
 
     bg_model = BGRiseModel()
-    bg_model.fit(archive2_path=args.archive2, archive5_path=args.archive5)
 
-    show_bg_lookup_stats(bg_model)
-    show_gi_stats(bg_model)
+    show_data_stats(args.cgmacros)
+
+    print("\n[모델 학습 중 ...]")
+    bg_model.fit(cgmacros_path=args.cgmacros)
+    print(f"  완료: {bg_model._n_samples}건 학습")
+
+    if not args.skip_cv:
+        show_cv_rmse(bg_model, args.cgmacros)
+
+    show_feature_importance(bg_model)
     evaluate_recommendations(
-        recipes, bg_model,
+        recipes, nutrition_db, bg_model,
         n_queries=args.n_queries,
         pre_bg=args.pre_bg,
     )

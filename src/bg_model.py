@@ -1,208 +1,228 @@
 """
-Blood glucose rise lookup model.
+Blood glucose rise prediction model — CGMacros 기반 Random Forest.
 
-archive(2)와 archive(5)를 계층적으로 결합하여 혈당 상승을 예측합니다.
+데이터: PhysioNet CGMacros (45명, 건강인 15 / 전당뇨 16 / 제2형 당뇨 14)
+       각 참여자의 실측 CGM + 식사 영양성분 데이터
 
-우선순위
--------
-1. archive(2) CGM 실측값  : 레시피명 매칭 -> 실측 평균 BG rise (mg/dL)
-2. archive(5) GI 추정값   : 레시피명 매칭 -> GI 구간별 BG rise 추정 (mg/dL)
-3. 전체 평균 fallback      : 매칭 실패 시 archive(2) 전체 평균 사용
+학습 특성 (Features)
+--------------------
+  carbs_g      : 탄수화물 (g)
+  protein_g    : 단백질 (g)
+  fat_g        : 지방 (g)
+  fiber_g      : 식이섬유 (g)
+  net_carbs_g  : 순 탄수화물 = carbs - fiber (g)
+  calories     : 열량 (kcal)
+  meal_type    : 0=breakfast / 1=lunch / 2=dinner
+  pre_bg       : 식전 혈당 (mg/dL)
 
-archive(2) 방식
---------------
-1. food_data.csv 각 식사 기록에서:
-   - 식전 혈당 = 식사 직전 CGM 측정값
-   - 식후 혈당 = 식사 후 30분~2시간 내 최고 CGM 측정값
-   - BG rise   = 식후 혈당 - 식전 혈당
-2. 음식별 평균 BG rise 딕셔너리 구성
-
-archive(5) GI 방식
+예측 대상 (Target)
 ------------------
-1. pred_food.csv 에서 음식별 평균 GI 로드
-2. GI 구간으로 BG rise 추정:
-   GI < 55  -> 15 mg/dL  (낮음)
-   GI 55-69 -> 25 mg/dL  (중간)
-   GI >= 70 -> 40 mg/dL  (높음)
+  bg_rise : 식후 최고 혈당 - 식전 혈당 (mg/dL)
 """
 
-import re
-import zipfile
+from __future__ import annotations
+
+import numpy as np
 import pandas as pd
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import LabelEncoder
+
+from .cgmacros_loader import load_cgmacros
+
+_MEAL_ENC = {"breakfast": 0, "lunch": 1, "dinner": 2}
 
 
-def _build_bg_rise_lookup(archive2_path: str) -> dict[str, float]:
-    """
-    archive(2) 실측 데이터에서 음식별 평균 BG rise(mg/dL) 딕셔너리를 생성합니다.
-    """
-    with zipfile.ZipFile(archive2_path) as z:
-        with z.open("blood_sugar_data.csv") as f:
-            bg = pd.read_csv(f)
-        with z.open("food_data.csv") as f:
-            food = pd.read_csv(f)
-
-    bg["datetime"] = pd.to_datetime(
-        bg["Date"] + " " + bg["Time"], format="%d-%m-%Y %I:%M %p"
-    )
-    food["datetime"] = pd.to_datetime(
-        food["Date"] + " " + food["Time"], format="%d-%m-%Y %I:%M %p"
-    )
-    bg = bg.sort_values("datetime").reset_index(drop=True)
-
-    food_rises: dict[str, list[float]] = {}
-
-    for _, meal in food.iterrows():
-        meal_time = meal["datetime"]
-
-        # 식전 혈당: 식사 직전 마지막 CGM 측정값
-        pre = bg[bg["datetime"] <= meal_time]["Blood Sugar Level"]
-        if pre.empty:
-            continue
-        pre_bg = float(pre.iloc[-1])
-
-        # 식후 혈당: 식사 후 30분~2시간 내 최고값
-        post_mask = (
-            (bg["datetime"] >= meal_time + pd.Timedelta(minutes=30)) &
-            (bg["datetime"] <= meal_time + pd.Timedelta(hours=2))
-        )
-        post = bg[post_mask]["Blood Sugar Level"]
-        if post.empty:
-            continue
-
-        bg_rise = float(post.max()) - pre_bg
-        if bg_rise < 0:
-            continue  # 노이즈 / 중복 식사 제거
-
-        # 식사에 포함된 각 음식에 BG rise 연결
-        for part in str(meal["Food Items"]).split(","):
-            name = re.sub(r"\(.*?\)", "", part).strip().lower()
-            if name:
-                food_rises.setdefault(name, []).append(bg_rise)
-
-    return {
-        food: round(sum(rises) / len(rises), 1)
-        for food, rises in food_rises.items()
-    }
-
-
-def _build_gi_lookup(archive5_path: str) -> dict[str, float]:
-    """
-    archive(5) pred_food.csv에서 음식별 평균 GI 딕셔너리를 생성합니다.
-    중복 음식명은 GI 평균으로 처리합니다.
-    """
-    with zipfile.ZipFile(archive5_path) as z:
-        with z.open("pred_food.csv") as f:
-            df = pd.read_csv(f)
-
-    gi_dict: dict[str, float] = {}
-    for name, grp in df.groupby("Food Name"):
-        gi_dict[name.lower()] = round(grp["Glycemic Index"].mean(), 1)
-    return gi_dict
-
-
-def _gi_to_bg_rise(gi: float) -> float:
-    """GI 구간 -> 혈당 상승 추정값 (mg/dL)"""
-    if gi < 55:
-        return 15.0   # 낮은 GI
-    elif gi < 70:
-        return 25.0   # 중간 GI
-    else:
-        return 40.0   # 높은 GI
+def _to_features(
+    carbs_g: float,
+    protein_g: float,
+    fat_g: float,
+    fiber_g: float,
+    net_carbs_g: float,
+    calories: float,
+    meal_type: str,
+    pre_bg: float,
+) -> list[float]:
+    meal_enc = _MEAL_ENC.get(str(meal_type).lower(), 1)
+    return [carbs_g, protein_g, fat_g, fiber_g, net_carbs_g, calories, meal_enc, pre_bg]
 
 
 class BGRiseModel:
     """
-    archive(2) CGM 실측 + archive(5) GI 계층적 혈당 상승 예측 모델.
+    CGMacros 실측 데이터 기반 혈당 상승 예측 모델.
 
-    레시피 이름 매칭 순서:
-      1순위 archive(2) -> 실측 평균 BG rise (mg/dL)
-      2순위 archive(5) -> GI 구간별 BG rise 추정 (mg/dL)
-      3순위 전체 평균  -> archive(2) 전체 평균 fallback
+    45명(당뇨 포함)의 CGM + 식사 기록으로 학습한 Gradient Boosting Regressor.
+    영양성분(탄수화물·단백질·지방·식이섬유)과 식전 혈당으로 BG rise를 예측합니다.
     """
 
-    def __init__(self):
-        self._lookup: dict[str, float]    = {}   # {food_name: mean_bg_rise}
-        self._gi_lookup: dict[str, float] = {}   # {food_name: mean_gi}
-        self._fitted = False
+    FEATURE_NAMES = [
+        "carbs_g", "protein_g", "fat_g", "fiber_g",
+        "net_carbs_g", "calories", "meal_type", "pre_bg",
+    ]
 
-    def fit(
-        self,
-        archive2_path: str = None,
-        archive5_path: str = None,
-        **kwargs,
-    ) -> "BGRiseModel":
-        """archive(2) 실측 데이터와 archive(5) GI 데이터를 로딩합니다."""
-        if archive2_path:
-            self._lookup = _build_bg_rise_lookup(archive2_path)
-        if archive5_path:
-            self._gi_lookup = _build_gi_lookup(archive5_path)
+    def __init__(self):
+        self._model = GradientBoostingRegressor(
+            n_estimators=200,
+            max_depth=4,
+            learning_rate=0.05,
+            min_samples_leaf=5,
+            subsample=0.8,
+            random_state=42,
+        )
+        self._fitted = False
+        self._mean_bg_rise = 20.0  # fallback
+        self._n_samples = 0
+
+    # ------------------------------------------------------------------
+    # Training
+    # ------------------------------------------------------------------
+
+    def fit(self, cgmacros_path: str, **kwargs) -> "BGRiseModel":
+        """
+        CGMacros zip에서 데이터를 로드하고 모델을 학습합니다.
+
+        Parameters
+        ----------
+        cgmacros_path : CGMacros_dateshifted365.zip 경로
+        """
+        df = load_cgmacros(cgmacros_path)
+        df = self._clean(df)
+        self._n_samples = len(df)
+        self._mean_bg_rise = round(float(df["bg_rise"].mean()), 1)
+
+        X = df[self.FEATURE_NAMES].values
+        y = df["bg_rise"].values
+
+        self._model.fit(X, y)
         self._fitted = True
         return self
 
-    def predict_by_name(self, recipe_name: str) -> tuple[float, str]:
-        """
-        레시피 이름으로 BG rise를 조회합니다.
+    @staticmethod
+    def _clean(df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        # meal_type 인코딩
+        df["meal_type"] = df["meal_type"].map(_MEAL_ENC).fillna(1).astype(int)
+        # 이상값 제거
+        df = df[df["bg_rise"] >= 0]
+        df = df[df["bg_rise"] <= 150]       # 150 mg/dL 초과는 제거
+        df = df[df["carbs_g"] <= 300]
+        df = df.dropna(subset=BGRiseModel.FEATURE_NAMES + ["bg_rise"])
+        return df.reset_index(drop=True)
 
-        매칭 방식: 가장 긴(= 가장 구체적인) 음식명을 우선합니다.
-        예) "Carrot Pulao Recipe" -> 'carrot'(6자), 'pulao'(5자), 'rice'(4자) 모두 매칭되면
-            'carrot'(가장 긴 이름)을 선택합니다.
+    # ------------------------------------------------------------------
+    # Prediction
+    # ------------------------------------------------------------------
+
+    def predict(
+        self,
+        carbs_g: float,
+        protein_g: float,
+        fat_g: float,
+        fiber_g: float,
+        net_carbs_g: float,
+        calories: float,
+        meal_type: str = "lunch",
+        pre_bg: float = 110.0,
+    ) -> float:
+        """
+        영양성분과 식전 혈당으로 BG rise를 예측합니다.
 
         Returns
         -------
-        (bg_rise_mg_dl, source)
-          'cgm'  - archive(2) CGM 실측값
-          'gi'   - archive(5) GI 기반 추정값
-          'mean' - archive(2) 전체 평균 (매칭 실패)
+        float : 예측 BG rise (mg/dL)
         """
-        name_lower = recipe_name.lower()
+        if not self._fitted:
+            return self._mean_bg_rise
 
-        # 1순위: archive(2) CGM 실측값 — 가장 긴 음식명 매칭 우선
-        best_food, best_rise = "", None
-        for food, rise in self._lookup.items():
-            if (food in name_lower or name_lower in food) and len(food) > len(best_food):
-                best_food, best_rise = food, rise
-        if best_rise is not None:
-            return best_rise, "cgm"
+        x = np.array([_to_features(
+            carbs_g, protein_g, fat_g, fiber_g,
+            net_carbs_g, calories, meal_type, pre_bg,
+        )]).reshape(1, -1)
 
-        # 2순위: archive(5) GI 추정값 — 가장 긴 음식명 매칭 우선
-        best_food, best_gi = "", None
-        for food, gi in self._gi_lookup.items():
-            if (food in name_lower or name_lower in food) and len(food) > len(best_food):
-                best_food, best_gi = food, gi
-        if best_gi is not None:
-            return _gi_to_bg_rise(best_gi), "gi"
+        rise = float(self._model.predict(x)[0])
+        return round(max(0.0, rise), 1)
 
-        # 3순위: 전체 평균 fallback
-        if self._lookup:
-            return round(sum(self._lookup.values()) / len(self._lookup), 1), "mean"
-        return 20.0, "mean"
+    def predict_from_nutrition(
+        self,
+        nutr: dict,
+        meal_type: str = "lunch",
+        pre_bg: float = 110.0,
+    ) -> float:
+        """
+        estimate_recipe_nutrition() 반환값 dict로 BG rise를 예측합니다.
+
+        Parameters
+        ----------
+        nutr      : {'carbs_g', 'protein_g', 'fat_g', 'fiber_g', 'net_carbs_g', 'calories', ...}
+        meal_type : 'breakfast' | 'lunch' | 'dinner'
+        pre_bg    : 식전 혈당 (mg/dL)
+        """
+        return self.predict(
+            carbs_g     = float(nutr.get("carbs_g",     0) or 0),
+            protein_g   = float(nutr.get("protein_g",   0) or 0),
+            fat_g       = float(nutr.get("fat_g",       0) or 0),
+            fiber_g     = float(nutr.get("fiber_g",     0) or 0),
+            net_carbs_g = float(nutr.get("net_carbs_g", 0) or 0),
+            calories    = float(nutr.get("calories",    0) or 0),
+            meal_type   = meal_type,
+            pre_bg      = pre_bg,
+        )
+
+    # ------------------------------------------------------------------
+    # Evaluation
+    # ------------------------------------------------------------------
+
+    def cv_rmse(self, cgmacros_path: str, cv: int = 5) -> tuple[float, float]:
+        """
+        5-fold 교차검증 RMSE를 반환합니다 (fit() 전에 호출 가능).
+
+        Returns
+        -------
+        (mean_rmse, std_rmse)
+        """
+        df = load_cgmacros(cgmacros_path)
+        df = self._clean(df)
+        X = df[self.FEATURE_NAMES].values
+        y = df["bg_rise"].values
+
+        scores = cross_val_score(
+            self._model, X, y,
+            cv=cv, scoring="neg_root_mean_squared_error",
+        )
+        rmse_scores = -scores
+        return round(float(rmse_scores.mean()), 2), round(float(rmse_scores.std()), 2)
+
+    def feature_importances(self) -> pd.Series:
+        """학습된 모델의 특성 중요도를 반환합니다."""
+        if not self._fitted:
+            raise RuntimeError("fit()을 먼저 호출하세요.")
+        return pd.Series(
+            self._model.feature_importances_,
+            index=self.FEATURE_NAMES,
+        ).sort_values(ascending=False)
+
+    # ------------------------------------------------------------------
+    # Classification
+    # ------------------------------------------------------------------
 
     def classify(
         self,
         bg_rise: float,
         pre_bg: float = 110.0,
-        source: str = "cgm",
     ) -> tuple[str, str, float]:
         """
         식후 2시간 혈당을 계산하여 대한당뇨병학회 기준으로 적합/부적합 판정.
 
         기준 (출처: 대한당뇨병학회 https://www.diabetes.or.kr)
-          - 식전 혈당 목표: 80~130 mg/dL
           - 식후 2시간 혈당 목표: 180 mg/dL 미만
         """
         post_meal_bg = round(pre_bg + bg_rise, 1)
-        src_label = {
-            "cgm":  "CGM 실측",
-            "gi":   "GI 추정",
-            "mean": "평균 추정",
-        }.get(source, source)
-
         if post_meal_bg < 180:
             label = "적합"
             desc  = (f"식후 혈당 예측 {post_meal_bg:.0f} mg/dL "
-                     f"(기준 180 미만 -- 목표 달성) [{src_label}]")
+                     f"(기준 180 미만 -- 목표 달성)")
         else:
             label = "부적합"
             desc  = (f"식후 혈당 예측 {post_meal_bg:.0f} mg/dL "
-                     f"(기준 180 초과 -- {post_meal_bg - 180:.0f} mg/dL 초과) [{src_label}]")
+                     f"(기준 180 초과 -- {post_meal_bg - 180:.0f} mg/dL 초과)")
         return label, desc, post_meal_bg

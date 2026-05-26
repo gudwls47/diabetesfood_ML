@@ -3,22 +3,19 @@ Diabetes-friendly recipe recommender — full pipeline.
 
 Data sources
 ------------
-- archive (1).zip : Per-food nutritional values (carbs, fiber, sugar ...)
-- archive (2).zip : Real CGM + meal diary -> 음식별 실측 BG rise 조회 (1순위)
-- archive (3).zip : Cleaned Indian recipes (5,938개)
-- archive (5).zip : Food GI DB -> GI 기반 BG rise 추정 (2순위 fallback)
+- archive (1).zip  : Per-food nutritional values (carbs, fiber, sugar ...)
+- archive (3).zip  : Cleaned Indian recipes (5,938개)
+- CGMacros zip     : 45명 CGM + 식사 영양성분 데이터 -> BG rise ML 모델 학습
 
 Flow
 ----
-1. Korean -> English translation  (translator.py)
-2. Ingredient coverage filter     (ingredient_matcher.py)
-3. Per-recipe nutrition estimate  (nutrition_db.py)
-4. BG rise lookup                 (bg_model.py)
-   - 1순위: archive(2) CGM 실측값
-   - 2순위: archive(5) GI 추정값
-   - 3순위: archive(2) 전체 평균
-5. Diabetes suitability label     (bg_model.BGRiseModel.classify)
-6. Rank by coverage and return
+1. Korean -> English translation   (translator.py)
+2. Ingredient coverage filter      (ingredient_matcher.py)
+3. Per-recipe nutrition estimate   (nutrition_db.py)
+4. BG rise prediction              (bg_model.BGRiseModel)
+   - Gradient Boosting: carbs, protein, fat, fiber, pre_bg -> BG rise
+5. Diabetes suitability label      (bg_model.BGRiseModel.classify)
+6. Rank by suitability then coverage
 """
 
 import pandas as pd
@@ -33,37 +30,32 @@ _SUIT_RANK = {"적합": 0, "부적합": 1}
 
 class DiabetesRecipeRecommender:
     def __init__(self):
-        self.bg_model = BGRiseModel()
-        self.recipes_df = None
+        self.bg_model    = BGRiseModel()
+        self.recipes_df  = None
         self.nutrition_db = None
-        self._bg_fitted = False
+        self._bg_fitted  = False
 
     def fit(
         self,
         recipes_df: pd.DataFrame,
         nutrition_db: pd.DataFrame,
-        archive2_path: str = None,
-        archive5_path: str = None,
+        cgmacros_path: str = None,
     ) -> "DiabetesRecipeRecommender":
         """
         Parameters
         ----------
         recipes_df    : output of load_indian_recipes()
         nutrition_db  : output of load_nutrition_db()
-        archive2_path : archive(2).zip 경로 -- CGM 실측 BG rise 로딩
-        archive5_path : archive(5).zip 경로 -- GI 기반 BG rise 추정 (fallback)
+        cgmacros_path : CGMacros_dateshifted365.zip 경로
         """
-        self.recipes_df = recipes_df.reset_index(drop=True)
+        self.recipes_df   = recipes_df.reset_index(drop=True)
         self.nutrition_db = nutrition_db
 
-        if archive2_path or archive5_path:
-            self.bg_model.fit(
-                archive2_path=archive2_path,
-                archive5_path=archive5_path,
-            )
+        if cgmacros_path:
+            self.bg_model.fit(cgmacros_path=cgmacros_path)
             self._bg_fitted = True
-            print(f"      CGM 실측: {len(self.bg_model._lookup)}개 음식  |  "
-                  f"GI DB: {len(self.bg_model._gi_lookup)}개 음식")
+            print(f"      학습 완료: {self.bg_model._n_samples}건 식사 데이터 "
+                  f"(평균 BG rise {self.bg_model._mean_bg_rise:.1f} mg/dL)")
 
         return self
 
@@ -84,7 +76,7 @@ class DiabetesRecipeRecommender:
         ingredients         : Korean or English ingredient list
         top_n               : number of results
         min_coverage        : minimum ingredient coverage (0-1)
-        meal_type           : 'breakfast'|'lunch'|'dinner'|'snacks'
+        meal_type           : 'breakfast' | 'lunch' | 'dinner'
         pre_bg              : pre-meal blood glucose (mg/dL)
         exclude_suitability : e.g. ['부적합'] to hide unsuitable recipes
         """
@@ -102,34 +94,26 @@ class DiabetesRecipeRecommender:
         nutrition_rows = []
         for _, row in candidates.iterrows():
             nutr = estimate_recipe_nutrition(row["ingredients"], self.nutrition_db)
+
             if self._bg_fitted:
-                bg_rise, source = self.bg_model.predict_by_name(row["name"])
-
-                # 탄수화물 스케일링: 기준 30g 대비 실제 순탄수화물로 BG rise 보정
-                # archive(2/5) 측정값은 표준 1인분(~30g 순탄수화물) 기준이므로
-                # 레시피의 실제 탄수화물량에 비례해 조정합니다.
-                net_carbs = nutr.get("net_carbs_g", 0) or 0
-                if net_carbs > 0 and source in ("cgm", "gi"):
-                    REF_NET_CARBS = 30.0  # 표준 1인분 기준 순탄수화물 (g)
-                    scale = max(0.3, min(net_carbs / REF_NET_CARBS, 2.5))
-                    bg_rise = round(bg_rise * scale, 1)
-
-                label, desc, post_bg = self.bg_model.classify(bg_rise, pre_bg, source)
+                bg_rise = self.bg_model.predict_from_nutrition(
+                    nutr, meal_type=meal_type, pre_bg=pre_bg
+                )
+                label, desc, post_bg = self.bg_model.classify(bg_rise, pre_bg)
             else:
                 bg_rise = None
                 post_bg = None
-                source  = None
-                label, desc = "정보 없음", "BG 데이터 없음"
+                label, desc = "정보 없음", "BG 모델 미학습"
+
             nutrition_rows.append({
                 **nutr,
-                "bg_rise_mg_dl":  bg_rise,
-                "post_meal_bg":   post_bg,
-                "bg_source":      source,
-                "suitability":    label,
+                "bg_rise_mg_dl":    bg_rise,
+                "post_meal_bg":     post_bg,
+                "suitability":      label,
                 "suitability_desc": desc,
             })
 
-        nutr_df = pd.DataFrame(nutrition_rows)
+        nutr_df    = pd.DataFrame(nutrition_rows)
         candidates = candidates.reset_index(drop=True)
         candidates = pd.concat([candidates, nutr_df], axis=1)
 
@@ -155,7 +139,7 @@ class DiabetesRecipeRecommender:
         return result[[
             "name", "coverage", "missing_ingredients",
             "carbs_g", "sugar_g", "fiber_g", "net_carbs_g",
-            "bg_rise_mg_dl", "post_meal_bg", "bg_source",
+            "bg_rise_mg_dl", "post_meal_bg",
             "suitability", "suitability_desc",
             "calories", "ingredients",
         ]]
