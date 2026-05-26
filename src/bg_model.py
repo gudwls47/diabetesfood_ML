@@ -143,6 +143,10 @@ class BGRiseModel:
         """
         레시피 이름으로 BG rise를 조회합니다.
 
+        매칭 방식: 가장 긴(= 가장 구체적인) 음식명을 우선합니다.
+        예) "Carrot Pulao Recipe" -> 'carrot'(6자), 'pulao'(5자), 'rice'(4자) 모두 매칭되면
+            'carrot'(가장 긴 이름)을 선택합니다.
+
         Returns
         -------
         (bg_rise_mg_dl, source)
@@ -152,15 +156,21 @@ class BGRiseModel:
         """
         name_lower = recipe_name.lower()
 
-        # 1순위: archive(2) CGM 실측값
+        # 1순위: archive(2) CGM 실측값 — 가장 긴 음식명 매칭 우선
+        best_food, best_rise = "", None
         for food, rise in self._lookup.items():
-            if food in name_lower or name_lower in food:
-                return rise, "cgm"
+            if (food in name_lower or name_lower in food) and len(food) > len(best_food):
+                best_food, best_rise = food, rise
+        if best_rise is not None:
+            return best_rise, "cgm"
 
-        # 2순위: archive(5) GI 추정값
+        # 2순위: archive(5) GI 추정값 — 가장 긴 음식명 매칭 우선
+        best_food, best_gi = "", None
         for food, gi in self._gi_lookup.items():
-            if food in name_lower or name_lower in food:
-                return _gi_to_bg_rise(gi), "gi"
+            if (food in name_lower or name_lower in food) and len(food) > len(best_food):
+                best_food, best_gi = food, gi
+        if best_gi is not None:
+            return _gi_to_bg_rise(best_gi), "gi"
 
         # 3순위: 전체 평균 fallback
         if self._lookup:

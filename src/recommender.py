@@ -104,6 +104,16 @@ class DiabetesRecipeRecommender:
             nutr = estimate_recipe_nutrition(row["ingredients"], self.nutrition_db)
             if self._bg_fitted:
                 bg_rise, source = self.bg_model.predict_by_name(row["name"])
+
+                # 탄수화물 스케일링: 기준 30g 대비 실제 순탄수화물로 BG rise 보정
+                # archive(2/5) 측정값은 표준 1인분(~30g 순탄수화물) 기준이므로
+                # 레시피의 실제 탄수화물량에 비례해 조정합니다.
+                net_carbs = nutr.get("net_carbs_g", 0) or 0
+                if net_carbs > 0 and source in ("cgm", "gi"):
+                    REF_NET_CARBS = 30.0  # 표준 1인분 기준 순탄수화물 (g)
+                    scale = max(0.3, min(net_carbs / REF_NET_CARBS, 2.5))
+                    bg_rise = round(bg_rise * scale, 1)
+
                 label, desc, post_bg = self.bg_model.classify(bg_rise, pre_bg, source)
             else:
                 bg_rise = None
