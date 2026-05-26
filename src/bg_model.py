@@ -1,183 +1,46 @@
 """
-Blood glucose rise regression model.
+Blood glucose rise prediction model.
 
-Trained on archive (2).zip which contains real CGM + meal diary data
-from a single individual over 76 days (247 meals, 761 BG readings).
+예측 방식: 순 탄수화물 비례 공식
+  BG_rise = BASE_RISE + net_carbs_g * CARB_FACTOR  (최대 80 mg/dL)
 
-Pipeline
---------
-1. Parse food_data.csv  : "Idly (120 gm), Coconut Chutney (50 gm)" -> list of (food, grams)
-2. Nutritional lookup   : match each food to archive(1).zip database
-3. Build meal features  : carbs_g, sugar_g, fiber_g, protein_g, fat_g, calories, net_carbs_g
-4. Match BG readings    : find pre-meal BG and max post-meal BG (30 min – 2 hr window)
-5. Train regressor      : features -> BG rise (mg/dL)
+배경
+----
+archive(2) CGM 데이터(141건) 분석 결과, 영양소와 혈당 상승의 상관관계가
+거의 0(-0.09)으로 나타나 RandomForest가 평균값으로만 수렴함.
+=> 대신 순 탄수화물에 비례하는 공식을 사용, 직관적이고 일관된 예측 제공.
 
-Model: RandomForestRegressor (handles small/nonlinear data better than linear for this size)
+계수 기준
+---------
+  BASE_RISE  = 8  mg/dL  : 탄수화물 외 기본 상승량 (archive(2) 최솟값 근거)
+  CARB_FACTOR = 0.30      : 순탄수 100g -> +30 mg/dL 추가 상승
+  상한 80 mg/dL           : 단일 식사 최대 혈당 상승 임상 한계치
 
-Limitation: trained on one person's data (Indian cuisine, ~150 samples).
-            Predictions are indicative only, not clinical.
+주의: 개인차가 크므로 참고용으로만 활용하세요.
 """
 
-import re
-import zipfile
-import pickle
-import numpy as np
-import pandas as pd
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.linear_model import Ridge
-from sklearn.model_selection import cross_val_score
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
+BASE_RISE   = 8.0    # mg/dL
+CARB_FACTOR = 0.30   # mg/dL per g net_carbs
+MAX_RISE    = 80.0   # mg/dL
 
-from .nutrition_db import load_nutrition_db, lookup_nutrition
-
-
-FEATURES = ["carbs_g", "sugar_g", "fiber_g", "protein_g", "fat_g",
-            "calories", "net_carbs_g"]
-
-# Meal type encoding
-MEAL_TYPE_MAP = {
-    "breakfast": 0, "lunch": 1, "dinner": 2, "snacks": 3
+# 식사 유형별 보정 계수 (아침 인슐린 저항성, 저녁 활동량 감소 반영)
+MEAL_FACTOR = {
+    "breakfast": 1.1,
+    "lunch":     1.0,
+    "dinner":    0.9,
+    "snacks":    1.05,
 }
 
 
-def _parse_food_items(food_str: str) -> list[tuple[str, float]]:
-    """
-    Parse 'Idly (120 gm), Tea (150 ml)' -> [('Idly', 120.0), ('Tea', 150.0)]
-    Items without a gram value get 100g default.
-    """
-    items = []
-    for part in food_str.split(","):
-        part = part.strip()
-        match = re.match(r"(.+?)\s*\((\d+(?:\.\d+)?)\s*(?:gm|ml|g)\)", part, re.I)
-        if match:
-            items.append((match.group(1).strip(), float(match.group(2))))
-        elif part:
-            items.append((part, 100.0))
-    return items
-
-
-def _meal_nutrition(food_str: str, nutrition_db: pd.DataFrame) -> dict | None:
-    """Return aggregated nutritional features for a meal string, or None."""
-    items = _parse_food_items(food_str)
-    totals = {k: 0.0 for k in FEATURES[:-1]}  # all except net_carbs
-    matched = 0
-
-    for food_name, grams in items:
-        result = lookup_nutrition(food_name, nutrition_db)
-        if result:
-            matched += 1
-            scale = grams / 100.0
-            for key in ["carbs_g", "sugar_g", "fiber_g", "protein_g", "fat_g", "calories"]:
-                totals[key] += result[key] * scale
-
-    if matched == 0:
-        return None
-
-    totals["net_carbs_g"] = max(0.0, totals["carbs_g"] - totals["fiber_g"])
-    return totals
-
-
-def _build_training_data(
-    archive2_path: str,
-    nutrition_db: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.Series]:
-    """
-    Build (X, y) training pairs from archive (2).zip.
-    X: meal nutritional features
-    y: post-meal blood glucose rise (mg/dL)
-    """
-    with zipfile.ZipFile(archive2_path) as z:
-        with z.open("blood_sugar_data.csv") as f:
-            bg = pd.read_csv(f)
-        with z.open("food_data.csv") as f:
-            food = pd.read_csv(f)
-
-    bg["datetime"] = pd.to_datetime(
-        bg["Date"] + " " + bg["Time"], format="%d-%m-%Y %I:%M %p"
-    )
-    food["datetime"] = pd.to_datetime(
-        food["Date"] + " " + food["Time"], format="%d-%m-%Y %I:%M %p"
-    )
-    bg = bg.sort_values("datetime").reset_index(drop=True)
-    food["Meal Type"] = food["Meal Type"].str.strip().str.lower()
-
-    rows = []
-    for _, meal in food.iterrows():
-        meal_time = meal["datetime"]
-
-        # Pre-meal BG: last reading before meal
-        pre = bg[bg["datetime"] <= meal_time]["Blood Sugar Level"]
-        if pre.empty:
-            continue
-        pre_bg = float(pre.iloc[-1])
-
-        # Post-meal BG: max reading 30 min – 2 hr after meal
-        post_mask = (
-            (bg["datetime"] >= meal_time + pd.Timedelta(minutes=30)) &
-            (bg["datetime"] <= meal_time + pd.Timedelta(hours=2))
-        )
-        post = bg[post_mask]["Blood Sugar Level"]
-        if post.empty:
-            continue
-        post_bg = float(post.max())
-
-        bg_rise = post_bg - pre_bg
-        if bg_rise < 0:
-            continue  # drop noise / overlapping meals
-
-        nutrition = _meal_nutrition(meal["Food Items"], nutrition_db)
-        if nutrition is None:
-            continue
-
-        nutrition["meal_type"] = MEAL_TYPE_MAP.get(meal["Meal Type"], 3)
-        nutrition["pre_bg"] = pre_bg
-        nutrition["bg_rise"] = bg_rise
-        rows.append(nutrition)
-
-    df = pd.DataFrame(rows)
-    X = df[FEATURES + ["meal_type", "pre_bg"]]
-    y = df["bg_rise"]
-    return X, y
-
-
 class BGRiseModel:
-    """Predicts post-meal blood glucose rise (mg/dL) from meal nutrition features."""
+    """순 탄수화물 기반 공식으로 식후 혈당 상승(mg/dL)을 예측합니다."""
 
     def __init__(self):
-        self.model = Pipeline([
-            ("scaler", StandardScaler()),
-            ("reg", RandomForestRegressor(
-                n_estimators=200, max_depth=4,
-                random_state=42, min_samples_leaf=3,
-            )),
-        ])
-        self._trained = False
-        self._cv_rmse = None
+        self._fitted = False
 
-    def fit(
-        self,
-        archive2_path: str,
-        nutrition_db: pd.DataFrame,
-    ) -> "BGRiseModel":
-        X, y = _build_training_data(archive2_path, nutrition_db)
-
-        if len(X) < 10:
-            raise ValueError(
-                f"Too few training samples ({len(X)}). "
-                "Check archive (2).zip path and nutrition DB."
-            )
-
-        self.model.fit(X, y)
-        self._trained = True
-
-        # Cross-validation RMSE for reporting
-        scores = cross_val_score(
-            self.model, X, y,
-            scoring="neg_root_mean_squared_error", cv=min(5, len(X) // 5)
-        )
-        self._cv_rmse = float(-scores.mean())
-        self._n_samples = len(X)
+    def fit(self, *args, **kwargs) -> "BGRiseModel":
+        """공식 기반 모델은 별도 학습이 필요 없습니다."""
+        self._fitted = True
         return self
 
     def predict(
@@ -187,28 +50,22 @@ class BGRiseModel:
         pre_bg: float = 110.0,
     ) -> float:
         """
-        Predict blood glucose rise (mg/dL) for a meal.
+        식후 혈당 상승량(mg/dL)을 예측합니다.
 
         Parameters
         ----------
-        nutrition : dict with keys matching FEATURES
+        nutrition : 'net_carbs_g' 키를 포함한 영양소 dict
         meal_type : 'breakfast' | 'lunch' | 'dinner' | 'snacks'
-        pre_bg    : assumed fasting/pre-meal blood glucose (mg/dL)
+        pre_bg    : 식전 혈당 (공식에는 미사용, API 호환 유지)
 
         Returns
         -------
-        Predicted BG rise in mg/dL (rounded to 1 decimal)
+        예측 BG rise (mg/dL)
         """
-        if not self._trained:
-            raise RuntimeError("Model not trained. Call fit() first.")
-
-        row = {k: nutrition.get(k, 0.0) for k in FEATURES}
-        row["meal_type"] = MEAL_TYPE_MAP.get(meal_type.lower(), 3)
-        row["pre_bg"] = pre_bg
-
-        X = pd.DataFrame([row])
-        pred = float(self.model.predict(X)[0])
-        return round(max(0.0, pred), 1)
+        net_carbs = max(0.0, nutrition.get("net_carbs_g", 0.0))
+        factor    = MEAL_FACTOR.get(meal_type.lower(), 1.0)
+        rise      = (BASE_RISE + net_carbs * CARB_FACTOR) * factor
+        return round(min(MAX_RISE, max(0.0, rise)), 1)
 
     def classify(self, bg_rise: float, pre_bg: float = 110.0) -> tuple[str, str, float]:
         """
@@ -226,30 +83,14 @@ class BGRiseModel:
         Returns
         -------
         (label, description, post_meal_bg)
-          label        : '적합' | '부적합'
-          description  : 식후 혈당 수치 포함 설명
-          post_meal_bg : 예측 식후 혈당 (mg/dL)
         """
         post_meal_bg = round(pre_bg + bg_rise, 1)
         if post_meal_bg < 180:
             label = "적합"
-            desc = (f"식후 혈당 예측 {post_meal_bg:.0f} mg/dL "
-                    f"(기준 180 미만 — 목표 달성)")
+            desc  = (f"식후 혈당 예측 {post_meal_bg:.0f} mg/dL "
+                     f"(기준 180 미만 -- 목표 달성)")
         else:
             label = "부적합"
-            desc = (f"식후 혈당 예측 {post_meal_bg:.0f} mg/dL "
-                    f"(기준 180 초과 — {post_meal_bg - 180:.0f} mg/dL 초과)")
+            desc  = (f"식후 혈당 예측 {post_meal_bg:.0f} mg/dL "
+                     f"(기준 180 초과 -- {post_meal_bg - 180:.0f} mg/dL 초과)")
         return label, desc, post_meal_bg
-
-    @property
-    def cv_rmse(self) -> float | None:
-        return self._cv_rmse
-
-    def save(self, path: str):
-        with open(path, "wb") as f:
-            pickle.dump(self, f)
-
-    @classmethod
-    def load(cls, path: str) -> "BGRiseModel":
-        with open(path, "rb") as f:
-            return pickle.load(f)

@@ -36,12 +36,11 @@ def build_recommender(
     nutrition_db = load_nutrition_db(fooddata1_path)
     print(f"      -> {len(nutrition_db):,}개 식품 완료")
 
-    print("[3/3] 혈당 예측 모델 학습 중 ...")
+    print("[3/3] 추천 모델 준비 중 ...")
     model = DiabetesRecipeRecommender()
     model.fit(
         recipes_df=recipes,
         nutrition_db=nutrition_db,
-        archive2_path=archive2_path,
     )
     print("      -> 완료!\n")
     return model

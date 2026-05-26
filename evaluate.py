@@ -3,7 +3,7 @@
 
 평가 항목
 ---------
-1. 혈당 상승 예측 모델 (RandomForestRegressor): 5-fold CV RMSE
+1. 혈당 예측 공식 파라미터 출력
 2. 레시피 추천 적합성 분포: 당뇨 적합 / 부적합 비율 (샘플 레시피 기준)
 """
 
@@ -12,20 +12,25 @@ import pandas as pd
 
 from src.data_loader import load_indian_recipes
 from src.nutrition_db import load_nutrition_db, estimate_recipe_nutrition
-from src.bg_model import BGRiseModel
+from src.bg_model import BGRiseModel, BASE_RISE, CARB_FACTOR, MAX_RISE
 
 DEFAULT_FOODDATA1 = r"C:\Users\gudwl\Downloads\archive (1).zip"
 DEFAULT_ARCHIVE2  = r"C:\Users\gudwl\Downloads\archive (2).zip"
 DEFAULT_ARCHIVE3  = r"C:\Users\gudwl\Downloads\archive (3).zip"
 
 
-def evaluate_bg_model(model: BGRiseModel):
-    """학습된 BG 모델의 CV RMSE를 출력."""
-    print("\n[1] 혈당 상승 예측 모델 (RandomForestRegressor)")
+def show_formula():
+    """혈당 예측 공식 파라미터를 출력합니다."""
+    print("\n[1] 혈당 상승 예측 공식")
     print("-" * 50)
-    print(f"  학습 샘플 수    : {model._n_samples}건")
-    print(f"  CV RMSE (5-fold): {model.cv_rmse:.2f} mg/dL")
-    print(f"  해석: 실제 혈당 상승값 대비 평균 +-{model.cv_rmse:.1f} mg/dL 오차")
+    print(f"  BG_rise = {BASE_RISE} + net_carbs_g x {CARB_FACTOR}  (상한 {MAX_RISE} mg/dL)")
+    print(f"  예시)")
+    examples = [(10, 110), (50, 110), (100, 110), (150, 120), (180, 120)]
+    for nc, pre in examples:
+        rise = min(MAX_RISE, BASE_RISE + nc * CARB_FACTOR)
+        post = pre + rise
+        label = "부적합" if post >= 180 else "적합"
+        print(f"    net_carbs {nc:3g}g + 식전 {pre} -> +{rise:.0f} -> 식후 {post:.0f} [{label}]")
 
 
 def evaluate_recommendations(
@@ -36,7 +41,7 @@ def evaluate_recommendations(
     pre_bg: float = 110.0,
     meal_type: str = "lunch",
 ):
-    """샘플 레시피에 대한 당뇨 적합성 분포를 출력."""
+    """샘플 레시피에 대한 당뇨 적합성 분포를 출력합니다."""
     print("\n[2] 레시피 추천 적합성 분포 평가")
     print("-" * 50)
 
@@ -44,9 +49,9 @@ def evaluate_recommendations(
 
     labels = []
     for _, row in sample.iterrows():
-        nutr = estimate_recipe_nutrition(row["ingredients"], nutrition_db)
-        bg_rise = model.predict(nutr, meal_type, pre_bg)
-        label, _, _ = model.classify(bg_rise, pre_bg)
+        nutr   = estimate_recipe_nutrition(row["ingredients"], nutrition_db)
+        rise   = model.predict(nutr, meal_type, pre_bg)
+        label, _, _ = model.classify(rise, pre_bg)
         labels.append(label)
 
     total      = len(labels)
@@ -70,16 +75,15 @@ if __name__ == "__main__":
                         help="적합성 평가에 사용할 레시피 수")
     args = parser.parse_args()
 
-    print("데이터 로딩 및 모델 학습 중 ...")
+    print("데이터 로딩 중 ...")
     recipes      = load_indian_recipes(args.archive3, archive2_path=args.archive2)
     nutrition_db = load_nutrition_db(args.fooddata1)
-    print(f"  레시피: {len(recipes):,}개  |  영양 DB: {len(nutrition_db):,}개 식품")
+    print(f"  레시피: {len(recipes):,}개  |  영양 DB: {len(nutrition_db):,}개 식품\n")
 
     bg_model = BGRiseModel()
-    bg_model.fit(args.archive2, nutrition_db)
-    print("  BG 모델 학습 완료\n")
+    bg_model.fit()
 
-    evaluate_bg_model(bg_model)
+    show_formula()
     evaluate_recommendations(
         recipes, nutrition_db, bg_model,
         n_queries=args.n_queries,

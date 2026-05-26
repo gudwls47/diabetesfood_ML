@@ -45,21 +45,12 @@ class DiabetesRecipeRecommender:
         ----------
         recipes_df    : output of load_indian_recipes()
         nutrition_db  : output of load_nutrition_db()
-        archive2_path : path to archive (2).zip for BG model training
+        archive2_path : (미사용) API 호환 유지용
         """
         self.recipes_df = recipes_df.reset_index(drop=True)
         self.nutrition_db = nutrition_db
-
-        if archive2_path:
-            try:
-                self.bg_model.fit(archive2_path, nutrition_db)
-                self._bg_fitted = True
-                print(f"      BG 모델 학습 완료 "
-                      f"(샘플 {self.bg_model._n_samples}건, "
-                      f"CV RMSE {self.bg_model.cv_rmse:.2f} mg/dL)")
-            except Exception as e:
-                print(f"      [경고] BG 모델 학습 실패: {e}")
-
+        self.bg_model.fit()
+        self._bg_fitted = True
         return self
 
     def recommend(
