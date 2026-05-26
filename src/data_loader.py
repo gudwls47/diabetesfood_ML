@@ -49,6 +49,7 @@ def load_foodcom_recipes(
     max_carbs_g: float  = 300.0,
     diabetic_only: bool = False,
     nrows: int = None,
+    serving_kcal: float = 600.0,
 ) -> pd.DataFrame:
     """
     Load RAW_recipes.csv from archive.zip (Food.com dataset).
@@ -60,6 +61,10 @@ def load_foodcom_recipes(
     max_carbs_g   : 이상치 제거용 최대 탄수화물 (기본 300 g)
     diabetic_only : True 시 'diabetic' 또는 'low-carb' 태그 레시피만 반환
     nrows         : 로드 행 수 제한 (테스트용)
+    serving_kcal  : 1인분 기준 칼로리 (기본 600 kcal).
+                    Food.com 영양성분은 레시피 전체(다인분) 기준이므로
+                    calories > serving_kcal 인 레시피는 비례 축소해 1인분으로 정규화.
+                    0 이하면 정규화 생략.
 
     Returns
     -------
@@ -82,7 +87,6 @@ def load_foodcom_recipes(
     df["protein_g"]   = df["_nutr"].apply(lambda x: float(x[4]) * _PROTEIN_DV_G / 100)
     df["sugar_g"]     = df["_nutr"].apply(lambda x: float(x[2]) * _SUGAR_DV_G   / 100)
     df["fiber_g"]     = 0.0    # Food.com 데이터에 섬유질 정보 없음
-    df["net_carbs_g"] = df["carbs_g"]  # 섬유질 없으므로 탄수화물 그대로 사용
 
     # 이상치 제거
     df = df[
@@ -91,6 +95,16 @@ def load_foodcom_recipes(
         (df["carbs_g"]  >= 0) &
         (df["carbs_g"]  <= max_carbs_g)
     ].copy()
+
+    # 1인분 기준 정규화
+    # Food.com 영양성분은 레시피 전체 기준 — calories > serving_kcal 이면 비례 축소
+    if serving_kcal and serving_kcal > 0:
+        ratio = np.minimum(1.0, serving_kcal / df["calories"].clip(lower=1.0))
+        for col in ("carbs_g", "fat_g", "protein_g", "sugar_g"):
+            df[col] = df[col] * ratio
+        df["calories"] = df["calories"] * ratio
+
+    df["net_carbs_g"] = df["carbs_g"]  # 섬유질 없으므로 탄수화물 그대로 사용
 
     # 재료 파싱
     df["ingredients"] = df["ingredients"].apply(_parse_list)
