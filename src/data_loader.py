@@ -25,6 +25,21 @@ _FAT_DV_G     = 78.0
 _PROTEIN_DV_G = 50.0
 _SUGAR_DV_G   = 50.0
 
+# 당뇨 추천에서 제외할 레시피 태그
+_EXCLUDE_TAGS = frozenset({
+    "alcoholic", "cocktails-mocktails", "beer", "spirits",
+    "punch-cocktails-mocktails",
+})
+
+# 레시피명에 포함 시 제외할 알코올 키워드
+_EXCLUDE_NAME_KEYWORDS = frozenset({
+    "rum", "vodka", "whiskey", "whisky", "bourbon", "gin", "tequila",
+    "beer", "wine", "champagne", "brandy", "liqueur", "kahlua",
+    "baileys", "frangelico", "schnapps", "amaretto", "cointreau",
+    "martini", "cocktail", "margarita", "mojito", "daiquiri",
+    "sangria", "jello shot", "jell-o shot", "shot glass",
+})
+
 
 def _parse_nutrition(s) -> list | None:
     try:
@@ -50,21 +65,23 @@ def load_foodcom_recipes(
     diabetic_only: bool = False,
     nrows: int = None,
     serving_kcal: float = 600.0,
+    exclude_inappropriate: bool = True,
 ) -> pd.DataFrame:
     """
     Load RAW_recipes.csv from archive.zip (Food.com dataset).
 
     Parameters
     ----------
-    archive_path  : archive.zip 경로
-    max_calories  : 이상치 제거용 최대 칼로리 (기본 3,000 kcal)
-    max_carbs_g   : 이상치 제거용 최대 탄수화물 (기본 300 g)
-    diabetic_only : True 시 'diabetic' 또는 'low-carb' 태그 레시피만 반환
-    nrows         : 로드 행 수 제한 (테스트용)
-    serving_kcal  : 1인분 기준 칼로리 (기본 600 kcal).
-                    Food.com 영양성분은 레시피 전체(다인분) 기준이므로
-                    calories > serving_kcal 인 레시피는 비례 축소해 1인분으로 정규화.
-                    0 이하면 정규화 생략.
+    archive_path          : archive.zip 경로
+    max_calories          : 이상치 제거용 최대 칼로리 (기본 3,000 kcal)
+    max_carbs_g           : 이상치 제거용 최대 탄수화물 (기본 300 g)
+    diabetic_only         : True 시 'diabetic' 또는 'low-carb' 태그 레시피만 반환
+    nrows                 : 로드 행 수 제한 (테스트용)
+    serving_kcal          : 1인분 기준 칼로리 (기본 600 kcal).
+                            Food.com 영양성분은 레시피 전체(다인분) 기준이므로
+                            calories > serving_kcal 인 레시피는 비례 축소해 1인분으로 정규화.
+                            0 이하면 정규화 생략.
+    exclude_inappropriate : True 시 알코올·칵테일류 레시피 제외 (기본 True)
 
     Returns
     -------
@@ -109,6 +126,24 @@ def load_foodcom_recipes(
     # 재료 파싱
     df["ingredients"] = df["ingredients"].apply(_parse_list)
     df["tags"]        = df["tags"].apply(_parse_list)
+
+    # 부적절 레시피 제거 (알코올·칵테일류)
+    if exclude_inappropriate:
+        # 태그 기반 제거
+        tag_mask = df["tags"].apply(
+            lambda tags: not bool(set(tags) & _EXCLUDE_TAGS)
+        )
+        # 레시피명 키워드 기반 제거
+        def _name_ok(name: str) -> bool:
+            low = str(name).lower()
+            return not any(kw in low for kw in _EXCLUDE_NAME_KEYWORDS)
+
+        name_mask = df["name"].apply(_name_ok)
+        before = len(df)
+        df = df[tag_mask & name_mask].copy()
+        removed = before - len(df)
+        if removed:
+            print(f"      [필터] 부적절 레시피 {removed:,}개 제거 (알코올·칵테일류)")
 
     # 당뇨/저탄수화물 태그 필터
     if diabetic_only:
