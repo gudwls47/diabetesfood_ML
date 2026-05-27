@@ -60,9 +60,10 @@ def _print_results(results):
             if len(missing) > 5:
                 missing_str += f" 외 {len(missing)-5}개"
             print(f"     추가 필요 재료 : {missing_str}")
+        print(f"     칼로리         : {row['calories']:.0f} kcal")
         print(f"     탄수화물       : {row['carbs_g']:.1f}g  |  "
-              f"식이섬유: {row['fiber_g']:.1f}g  |  "
-              f"순 탄수화물: {row['net_carbs_g']:.1f}g")
+              f"단백질: {row['protein_g']:.1f}g  |  "
+              f"지방: {row['fat_g']:.1f}g")
         if row["bg_rise_mg_dl"] is not None:
             print(f"     혈당 상승 예측 : +{row['bg_rise_mg_dl']:.0f} mg/dL  "
                   f"-> 식후 혈당 {row['post_meal_bg']:.0f} mg/dL")
