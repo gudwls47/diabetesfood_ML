@@ -13,6 +13,7 @@ Source: https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-in
 """
 
 import ast
+import re
 import zipfile
 
 import numpy as np
@@ -31,7 +32,7 @@ _EXCLUDE_TAGS = frozenset({
     "punch-cocktails-mocktails",
 })
 
-# 레시피명에 포함 시 제외할 알코올 키워드
+# 레시피명에 포함 시 제외할 알코올 키워드 (단어 경계 매칭)
 _EXCLUDE_NAME_KEYWORDS = frozenset({
     "rum", "vodka", "whiskey", "whisky", "bourbon", "gin", "tequila",
     "beer", "wine", "champagne", "brandy", "liqueur", "kahlua",
@@ -39,6 +40,14 @@ _EXCLUDE_NAME_KEYWORDS = frozenset({
     "martini", "cocktail", "margarita", "mojito", "daiquiri",
     "sangria", "jello shot", "jell-o shot", "shot glass",
 })
+
+# 긴 구문을 먼저 매칭하도록 길이 내림차순 정렬 후 단어 경계 정규식 컴파일
+_EXCLUDE_NAME_RE = re.compile(
+    r'\b(?:' +
+    '|'.join(re.escape(kw) for kw in sorted(_EXCLUDE_NAME_KEYWORDS, key=len, reverse=True)) +
+    r')\b',
+    re.IGNORECASE,
+)
 
 
 def _parse_nutrition(s) -> list | None:
@@ -133,10 +142,9 @@ def load_foodcom_recipes(
         tag_mask = df["tags"].apply(
             lambda tags: not bool(set(tags) & _EXCLUDE_TAGS)
         )
-        # 레시피명 키워드 기반 제거
+        # 레시피명 키워드 기반 제거 (단어 경계 정규식 — ginger/crumb 등 오탐 방지)
         def _name_ok(name: str) -> bool:
-            low = str(name).lower()
-            return not any(kw in low for kw in _EXCLUDE_NAME_KEYWORDS)
+            return not bool(_EXCLUDE_NAME_RE.search(str(name)))
 
         name_mask = df["name"].apply(_name_ok)
         before = len(df)
