@@ -19,6 +19,7 @@
 [결과]
   레시피명       : Potato Carrot Soup
   재료 보유율    : 60%
+  추가 필요 재료 : celery, chicken broth
   칼로리         : 320 kcal
   탄수화물       : 21.3g  |  단백질: 8.5g  |  지방: 6.2g
   혈당 상승 예측 : +35 mg/dL -> 식후 혈당 145 mg/dL
