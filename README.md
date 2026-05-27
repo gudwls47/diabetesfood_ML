@@ -10,15 +10,17 @@
 ```
 입력: "감자, 양파, 당근"
   ↓ 한국어 → 영어 변환 (potato, onion, carrot)
-  ↓ Food.com 레시피 231,637개에서 재료 보유율 필터링
-    (기본 50%, 결과 없으면 자동 완화: 50→30→20→10%)
-  ↓ 레시피에 내장된 영양성분 사용 (칼로리·탄수화물·단백질·지방)
+  ↓ Food.com 레시피 ~229,000개에서 재료 보유율 필터링
+    (알코올·칵테일류 ~2,600개 자동 제거)
+    (결과 없으면 자동 완화: 요청값 → 50 → 30 → 20 → 10%)
+  ↓ 레시피 내장 영양성분 사용 (600 kcal 1인분 기준으로 정규화)
   ↓ Gradient Boosting 모델로 혈당 상승 예측
   ↓
 [결과]
   레시피명       : Potato Carrot Soup
   재료 보유율    : 60%
-  순 탄수화물    : 21.3g
+  칼로리         : 320 kcal
+  탄수화물       : 21.3g  |  단백질: 8.5g  |  지방: 6.2g
   혈당 상승 예측 : +35 mg/dL -> 식후 혈당 145 mg/dL
   당뇨 적합성    : [적합]  식후 혈당 예측 145 mg/dL (기준 180 미만 -- 목표 달성)
 ```
@@ -31,10 +33,35 @@
 
 | 단계 | 내용 | 데이터 출처 |
 |------|------|------------|
-| 1 | **재료 매칭** | 서브스트링 매칭으로 만들 수 있는 레시피 필터링 (231,637개 전체 대상) | archive.zip |
-| 2 | **영양성분** | 레시피에 내장된 칼로리·탄수화물·단백질·지방 직접 사용 | archive.zip |
+| 1 | **레시피 필터링** | 알코올·칵테일류 제거 후 재료 보유율로 필터링 | archive.zip |
+| 2 | **영양성분** | 레시피 내장 영양성분을 600 kcal 1인분 기준으로 정규화 | archive.zip |
 | 3 | **혈당 상승 예측** | Gradient Boosting 회귀 모델 | CGMacros.zip |
 | 4 | **당뇨 적합성 판정** | 식후 2시간 혈당 180 mg/dL 기준 (대한당뇨병학회) | - |
+
+---
+
+### 데이터 전처리
+
+#### 1인분 정규화 (600 kcal 기준)
+
+Food.com 영양성분은 레시피 전체(다인분) 기준입니다.
+칼로리가 600 kcal를 초과하는 레시피는 비례 축소하여 1인분으로 정규화합니다.
+
+```
+ratio = min(1.0, 600 / 레시피_총칼로리)
+carbs_g   = 원본_carbs   × ratio
+protein_g = 원본_protein × ratio
+fat_g     = 원본_fat     × ratio
+calories  = 원본_calories × ratio
+```
+
+전체 레시피의 약 80%는 이미 600 kcal 이하이므로 변경 없음.
+
+#### 부적절 레시피 필터
+
+레시피명에 알코올 관련 단어(rum, gin, vodka, wine, beer, whiskey, martini, cocktail 등)가
+**단어 경계(word boundary)** 기준으로 포함된 레시피를 자동 제거합니다.
+(`ginger`, `crumb` 등 비슷한 철자의 정상 재료는 제거되지 않음)
 
 ---
 
@@ -71,6 +98,9 @@ BG rise   = 식후 최고값 - 식전값
 | fat_g | 0.066 | 지방 (g) |
 | fiber_g | 0.064 | 식이섬유 (g) |
 
+> **Food.com 데이터에는 식이섬유 정보가 없어** `fiber_g = 0`으로 처리합니다.
+> 식이섬유 중요도가 가장 낮은(0.064) 특성이므로 예측 영향은 미미합니다.
+
 > **식전 혈당이 가장 중요한 이유**: 혈당이 이미 높은 상태에서 식사하면 식후 혈당이 더 크게 오릅니다.
 > 이 패턴이 45명의 실측 데이터에서 학습되었습니다.
 
@@ -100,8 +130,8 @@ BG rise   = 식후 최고값 - 식전값
 | `archive.zip` | [Food.com Recipes Dataset (Kaggle)](https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions) | 레시피 231,637개 + 내장 영양성분 |
 | `CGMacros_dateshifted365.zip` | [PhysioNet CGMacros v1.0.0](https://physionet.org/content/cgmacros/1.0.0/) | 45명 CGM + 식사 기록 — ML 모델 학습 |
 
-> **Food.com 영양성분**: calories, carbs, fat, protein, sugar (%DV → g 변환).
-> 식이섬유 데이터가 없어 fiber_g = 0, net_carbs_g = carbs_g 로 처리합니다.
+> **Food.com 영양성분**: calories, carbs, fat, protein (%DV → g 변환, 600 kcal 1인분 정규화).
+> 식이섬유 데이터 없음 → `fiber_g = 0` 고정.
 
 ---
 
@@ -164,11 +194,17 @@ CGMacros 데이터 통계, 5-fold 교차검증 RMSE, 특성 중요도, 레시피
 diabetes_ml/
 ├── src/
 │   ├── cgmacros_loader.py    # CGMacros 45명 CSV 파싱, 식사별 BG rise 추출
-│   ├── data_loader.py        # Food.com 레시피 로딩 (231,637개, 영양성분 내장)
+│   ├── data_loader.py        # Food.com 레시피 로딩 (영양성분 정규화, 알코올 필터)
 │   ├── translator.py         # 한국어 재료명 -> 영어 변환 딕셔너리
 │   ├── ingredient_matcher.py # 재료 보유율 계산 및 레시피 필터링 (자동 임계값 완화)
 │   ├── bg_model.py           # Gradient Boosting BG rise 예측 모델
 │   └── recommender.py        # 전체 파이프라인 통합
+├── scripts/
+│   ├── analyze_archive.py         # Food.com 데이터 통계 분석
+│   ├── find_high_bg.py            # BG rise 50+ 레시피 탐색
+│   ├── find_high_bg_ingredients.py# 고위험 레시피 공통 재료 분석
+│   ├── show_filtered.py           # 알코올 필터 적용 결과 확인
+│   └── test_serving.py            # 1인분 정규화 결과 검증
 ├── main.py                   # 실행 진입점 (대화형 / CLI)
 ├── evaluate.py               # 모델 평가 (CV RMSE, 특성 중요도, 적합성 분포)
 └── requirements.txt
