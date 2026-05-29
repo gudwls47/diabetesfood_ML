@@ -17,8 +17,8 @@ import argparse
 from src.data_loader import load_foodcom_recipes
 from src.recommender import DiabetesRecipeRecommender
 
-DEFAULT_ARCHIVE_FOOD = r"C:\Users\gudwl\Downloads\archive.zip"
-DEFAULT_CGMACROS     = r"C:\Users\gudwl\Downloads\CGMacros_dateshifted365.zip"
+DEFAULT_ARCHIVE_FOOD = r"C:\Users\gudwl\diabetes_ml\archive.zip"
+DEFAULT_CGMACROS     = r"C:\Users\gudwl\diabetes_ml\CGMacros_dateshifted365.zip"
 
 
 def build_recommender(
